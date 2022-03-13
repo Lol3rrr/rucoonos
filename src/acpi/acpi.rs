@@ -3,7 +3,7 @@ use crate::{
     println,
 };
 
-use super::{Mapper, PhysicalPtr, RSDTHeader};
+use super::{Mapper, PhysicalPtr, SDTHeader};
 
 mod aml;
 
@@ -78,22 +78,13 @@ pub mod raw {
 pub enum AcipEntry {
     Apic(AcipApicEntry),
     FADT(raw::FADT),
-    HighPrecisionEventTimer {
-        header: RSDTHeader,
-        ptr: PhysicalPtr,
-    },
-    WindowsACPIEmulatedDevices {
-        header: RSDTHeader,
-        ptr: PhysicalPtr,
-    },
-    Unknown {
-        header: RSDTHeader,
-        ptr: PhysicalPtr,
-    },
+    HighPrecisionEventTimer { header: SDTHeader, ptr: PhysicalPtr },
+    WindowsACPIEmulatedDevices { header: SDTHeader, ptr: PhysicalPtr },
+    Unknown { header: SDTHeader, ptr: PhysicalPtr },
 }
 
 impl AcipEntry {
-    pub fn load<M>(header: RSDTHeader, other: PhysicalPtr, mapping: &M) -> Self
+    pub fn load<M>(header: SDTHeader, other: PhysicalPtr, mapping: &M) -> Self
     where
         M: Mapper + Clone,
     {
@@ -110,7 +101,7 @@ impl AcipEntry {
                     local_addr,
                     flags,
                     starting_addr: other.add_raw(8),
-                    remaining: header.length - 8 - (core::mem::size_of::<RSDTHeader>() as u32),
+                    remaining: header.length - 8 - (core::mem::size_of::<SDTHeader>() as u32),
                 })
             }
             "FACP" => {

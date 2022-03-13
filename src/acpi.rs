@@ -3,9 +3,20 @@ pub mod acpi;
 mod ptr;
 pub use ptr::*;
 
+mod raw {
+    #[repr(packed)]
+    pub struct RSDP {
+        pub signature: [u8; 8],
+        pub checksum: u8,
+        pub oemid: [u8; 6],
+        pub revision: u8,
+        pub rsdt_addr: u32,
+    }
+}
+
 /// This Trait is used to Map a Physical Address to a Virtual one allowing the User to specify the
 /// Translation Process/Method independently depending on their Setup
-pub trait Mapper {
+pub trait Mapper: Clone {
     /// This maps a Physical Address to a Virtual one
     fn map(&self, physical: u64) -> u64;
 }
@@ -27,15 +38,6 @@ impl Mapper for OffsetMapper {
     }
 }
 
-#[repr(packed)]
-struct RawRSDP {
-    signature: [u8; 8],
-    checksum: u8,
-    oemid: [u8; 6],
-    revision: u8,
-    rsdt_addr: u32,
-}
-
 #[derive(Debug)]
 pub struct RSDP {
     signature: [u8; 8],
@@ -51,7 +53,7 @@ impl RSDP {
         M: Mapper,
     {
         let target_ptr = physical_ptr.translate(mapping);
-        let raw = unsafe { target_ptr.read::<RawRSDP>() };
+        let raw = unsafe { target_ptr.read::<raw::RSDP>() };
 
         Self {
             signature: raw.signature,
@@ -122,10 +124,10 @@ where
 
         let ptr_size = if signature_str == "XSDT" { 8 } else { 4 };
 
-        let entries = (header.length as usize - core::mem::size_of::<RSDTHeader>()) / ptr_size;
+        let entries = (header.length as usize - core::mem::size_of::<SDTHeader>()) / ptr_size;
 
         let ptrs = RSDTPointers {
-            start: ptr.add_raw(core::mem::size_of::<RSDTHeader>() as u64),
+            start: ptr.add_raw(core::mem::size_of::<SDTHeader>() as u64),
             size: ptr_size,
             count: entries,
             mapping,
@@ -158,7 +160,7 @@ impl<'m, M> Iterator for RSDTIter<'m, M>
 where
     M: Mapper,
 {
-    type Item = (RSDTHeader, PhysicalPtr);
+    type Item = (SDTHeader, PhysicalPtr);
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.left == 0 {
@@ -172,8 +174,8 @@ where
             PhysicalPtr::new(unsafe { virtual_current_ptr.read::<u64>() })
         };
 
-        let header = unsafe { RSDTHeader::load(raw_header_ptr, self.mapping) };
-        let rest_ptr = raw_header_ptr.add_raw(core::mem::size_of::<RSDTHeader>() as u64);
+        let header = unsafe { SDTHeader::load(raw_header_ptr, self.mapping) };
+        let rest_ptr = raw_header_ptr.add_raw(core::mem::size_of::<SDTHeader>() as u64);
 
         self.ptr = self.ptr.add_raw(self.size);
         self.left -= 1;

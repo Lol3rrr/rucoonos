@@ -2,34 +2,42 @@ use crate::println;
 
 // https://wiki.osdev.org/PCI#Enumerating_PCI_Buses
 
-pub fn read_32bit(bus: u8, slot: u8, func: u8, offset: u8) -> u32 {
+const PCI_COMMAND: u8 = 0x4;
+
+const CONFIG_ADDRESS: u16 = 0xCF8;
+const CONFIG_DATA: u16 = 0xCFC;
+
+fn address(bus: u8, slot: u8, func: u8, offset: u8) -> u32 {
     let lbus = bus as u32;
     let lslot = slot as u32;
     let lfunc = func as u32;
     let offset = offset as u32;
 
-    let address: u32 =
-        ((lbus << 16) | (lslot << 11) | (lfunc << 8) | (offset & 0xFC) | (0x80000000));
-    let mut outport = x86_64::instructions::port::Port::new(0xCF8);
+    ((lbus << 16) | (lslot << 11) | (lfunc << 8) | (offset & 0xFC) | (0x80000000))
+}
+
+pub fn read_32bit(bus: u8, slot: u8, func: u8, offset: u8) -> u32 {
+    let address = address(bus, slot, func, offset);
+    let mut outport = x86_64::instructions::port::Port::new(CONFIG_ADDRESS);
     unsafe {
         outport.write(address);
     }
 
     let mut inport: x86_64::instructions::port::Port<u32> =
-        x86_64::instructions::port::Port::new(0xCFC);
+        x86_64::instructions::port::Port::new(CONFIG_DATA);
     let raw_result: u32 = unsafe { inport.read() };
 
     raw_result
 }
 
 pub fn read_word(bus: u8, slot: u8, func: u8, offset: u8) -> u16 {
+    let address = address(bus, slot, func, offset);
+
     let lbus = bus as u32;
     let lslot = slot as u32;
     let lfunc = func as u32;
     let offset = offset as u32;
 
-    let address: u32 =
-        ((lbus << 16) | (lslot << 11) | (lfunc << 8) | (offset & 0xFC) | (0x80000000));
     let mut outport = x86_64::instructions::port::Port::new(0xCF8);
     unsafe {
         outport.write(address);
@@ -59,8 +67,27 @@ pub struct GenericHeader {
 
 #[derive(Debug)]
 pub struct Device {
+    pub bus: u8,
+    pub slot: u8,
+    pub func: u8,
     pub generic: GenericHeader,
     pub header_type: HeaderType,
+}
+
+impl Device {
+    pub fn enable_bus_mastering(&self) {
+        let address = address(self.bus, self.slot, self.func, PCI_COMMAND);
+        let mut address_port = x86_64::instructions::port::Port::new(CONFIG_ADDRESS);
+        unsafe {
+            address_port.write(address);
+        }
+
+        let mut data_port = x86_64::instructions::port::Port::<u32>::new(CONFIG_DATA);
+        let previous = unsafe { data_port.read() };
+        unsafe {
+            data_port.write(previous | (1 << 2));
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -105,6 +132,7 @@ pub enum HeaderType {
     Generic {
         BaseAddresses: [BaseAddressRegister; 6],
         CardbusCISPointer: u32,
+        interrupt_line: u8,
     },
     Unknown {
         ty: u8,
@@ -139,6 +167,9 @@ fn load_device(bus: u8, device: u8) -> Option<Device> {
     }
 
     let device_id = read_word(bus, device, function, 0x2);
+
+    let second_row = read_32bit(bus, device, function, 0x4);
+    println!("Row: 0b{:032b}", second_row);
 
     let baseclass = (read_word(bus, device, function, 0xa) & 0xff00) >> 8;
     let subclass = (read_word(bus, device, function, 0xa) & 0x00ff);
@@ -183,15 +214,21 @@ fn load_device(bus: u8, device: u8) -> Option<Device> {
             ];
             let cis_poiner = read_32bit(bus, device, function, 0x28);
 
+            let last_line = read_32bit(bus, device, function, 0x3c);
+
             HeaderType::Generic {
                 BaseAddresses: base_addresses,
                 CardbusCISPointer: cis_poiner,
+                interrupt_line: (last_line & 0x000000ff) as u8,
             }
         }
         other => HeaderType::Unknown { ty: other },
     };
 
     Some(Device {
+        bus,
+        slot: device,
+        func: function,
         generic: GenericHeader {
             id: device_id,
             vendor_id: vendorid,

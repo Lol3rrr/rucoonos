@@ -31,6 +31,7 @@ lazy_static! {
         idt[InterruptIndex::Timer.as_usize()].set_handler_fn(timer::timer_interrupt_handler);
         idt[InterruptIndex::Keyboard.as_usize()]
             .set_handler_fn(keyboard::keyboard_interrupt_handler);
+        idt[PIC_1_OFFSET as usize + 0xb].set_handler_fn(network_interrupt);
 
         idt
     };
@@ -41,13 +42,17 @@ pub fn init_idt() {
 
     /*
     unsafe {
-        //PICS.lock().disable();
+        PICS.lock().disable();
     }
     */
 
     unsafe {
         timer::configure_pit();
     }
+}
+
+extern "x86-interrupt" fn network_interrupt(stack_frame: InterruptStackFrame) {
+    println!("Networking");
 }
 
 extern "x86-interrupt" fn breakpoint_handler(stack_frame: InterruptStackFrame) {

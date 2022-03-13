@@ -102,7 +102,7 @@ impl Kernel {
         }) {
             if header.generic.id == 0x100E && header.generic.vendor_id == 0x8086 {
                 println!("E1000 Networking Controller: {:?}", header);
-                //device::E1000Driver::new(header, offset);
+                device::E1000Driver::new(header, offset);
             } else {
                 println!("Unknown Networking-Device: {:?}", header);
             }

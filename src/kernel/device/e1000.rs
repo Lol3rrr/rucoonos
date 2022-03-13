@@ -13,8 +13,10 @@ pub struct E1000Card {
     has_eeprom: bool,
     rx_ptr: x86_64::VirtAddr,
     tx_ptr: x86_64::VirtAddr,
+    cur_tx: u32,
 }
 
+const REG_CTRL: u16 = 0x0000;
 const REG_STATUS: u16 = 0x0008;
 const REG_IMASK: u16 = 0x00D0;
 
@@ -235,15 +237,20 @@ impl E1000Card {
                 REG_TCTRL,
                 TCTL_EN | TCTL_PSP | (15 << TCTL_CT_SHIFT) | (64 << TCTL_COLD_SHIFT) | TCTL_RTLC,
             );
-            coms.write_command(REG_TCTRL, 0b0110000000000111111000011111010);
+            //coms.write_command(REG_TCTRL, 0b0110000000000111111000011111010);
             coms.write_command(REG_TIPG, 0x0060200A);
 
             desc_virt_ptr
         };
 
         {
+            /*
             coms.write_command(REG_IMASK, 0x1F6DC);
             coms.write_command(REG_IMASK, 0xff & !4);
+            coms.read_command(0xc0);
+            */
+
+            coms.write_command(0x00d0, 0x04 | 0x80);
             coms.read_command(0xc0);
         }
 
@@ -252,6 +259,7 @@ impl E1000Card {
             has_eeprom,
             rx_ptr: rx_desc_ptrs,
             tx_ptr: tx_desc_ptr,
+            cur_tx: 0,
         }
     }
 
@@ -298,10 +306,12 @@ impl E1000Card {
         }
     }
 
-    pub fn send_packet(&self, data: &[u8]) {
+    pub fn send_packet(&mut self, data: &[u8]) {
         let raw_address = self.tx_ptr.as_u64();
-        let base_ptr =
-            unsafe { &mut *(((raw_address as usize) as *const tx_desc as *mut tx_desc).add(0)) };
+        let base_ptr = unsafe {
+            &mut *(((raw_address as usize) as *const tx_desc as *mut tx_desc)
+                .add(self.cur_tx as usize))
+        };
 
         base_ptr.addr = MEMORY_MAPPING
             .get()
@@ -313,7 +323,11 @@ impl E1000Card {
         base_ptr.cmd = CMD_EOP | CMD_IFCS | CMD_RS;
         base_ptr.status = 0;
 
-        self.com.write_command(REG_TXDESCTAIL, 1);
+        let next_tail = (self.cur_tx + 1) % 8;
+
+        self.com.write_command(REG_TXDESCTAIL, next_tail);
         while base_ptr.status & 0xff == 0 {}
+
+        self.cur_tx = next_tail;
     }
 }

@@ -37,9 +37,11 @@ fn main() {
         .arg("-device")
         .arg("isa-debug-exit,iobase=0xf4,iosize=0x04")
         .arg("-netdev")
-        .arg("user,id=network0")
+        .arg("tap,id=network0,ifname=tap0,script=./qemu-ifup,downscript=./qemu-ifdown")
         .arg("-device")
-        .arg("e1000,netdev=network0,mac=52:54:00:12:34:56")
+        .arg("e1000,netdev=network0")
+        .arg("-object")
+        .arg("filter-dump,id=f1,netdev=network0,file=dump.dat")
         .arg("-serial")
         .arg("stdio");
     run_cmd.args(RUN_ARGS);
