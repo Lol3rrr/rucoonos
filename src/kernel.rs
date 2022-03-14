@@ -7,6 +7,7 @@ use crate::{
     println, RUNTIME,
 };
 
+use alloc::vec::Vec;
 use bootloader::boot_info::Optional;
 use rucoon::runtime::{AddTaskError, RunError, TaskID};
 use x86_64::{structures::paging::OffsetPageTable, VirtAddr};
@@ -16,11 +17,18 @@ mod pci;
 
 static MEMORY_MAPPING: spin::Once<OffsetPageTable> = spin::Once::new();
 
+static KERNEL_INSTANCE: spin::Once<Kernel> = spin::Once::new();
+
 pub struct Kernel {
     rsdt: Option<(RSDT<OffsetMapper>, OffsetMapper)>,
+    networking: Option<spin::Mutex<device::E1000Driver>>,
 }
 
 impl Kernel {
+    pub fn try_get() -> Option<&'static Self> {
+        KERNEL_INSTANCE.get()
+    }
+
     /// This will initialize the IDT, GDT and the PIT
     fn basic_init() {
         x86_64::instructions::interrupts::disable();
@@ -87,10 +95,10 @@ impl Kernel {
     }
 
     /// This is used to obtain configuration about PCI
-    fn setup_pci(physical_memory_offset: Optional<u64>) {
+    fn setup_pci(physical_memory_offset: Optional<u64>) -> Option<device::E1000Driver> {
         let offset = match physical_memory_offset {
             Optional::Some(o) => o,
-            _ => return,
+            _ => return None,
         };
 
         let device_header = pci::bruteforce();
@@ -102,15 +110,19 @@ impl Kernel {
         }) {
             if header.generic.id == 0x100E && header.generic.vendor_id == 0x8086 {
                 println!("E1000 Networking Controller: {:?}", header);
-                device::E1000Driver::new(header, offset);
+                if let Ok(driver) = device::E1000Driver::new(header, offset) {
+                    return Some(driver);
+                }
             } else {
                 println!("Unknown Networking-Device: {:?}", header);
             }
         }
+
+        None
     }
 
     /// Sets up the System to a working state and sets up the Kernel to start running
-    pub fn init(boot_info: &'static mut bootloader::BootInfo) -> Self {
+    pub fn init(boot_info: &'static mut bootloader::BootInfo) -> &Self {
         println!("Initializing Kernel...");
         Self::basic_init();
 
@@ -127,11 +139,15 @@ impl Kernel {
         );
         MEMORY_MAPPING.call_once(|| mapper);
 
-        Self::setup_pci(boot_info.physical_memory_offset.clone());
+        let network_driver = Self::setup_pci(boot_info.physical_memory_offset.clone());
 
         println!("Initialized Kernel");
 
-        Self { rsdt }
+        let instance = Self {
+            rsdt,
+            networking: network_driver.map(|d| spin::Mutex::new(d)),
+        };
+        KERNEL_INSTANCE.call_once(|| instance)
     }
 
     pub fn add_task<F>(&self, fut: F) -> Result<TaskID, AddTaskError>
@@ -152,5 +168,20 @@ impl Kernel {
             rsdt.iter()
                 .map(|(header, ptr)| unsafe { acpi::acpi::AcipEntry::load(header, ptr, mapper) }),
         )
+    }
+
+    pub fn handle_networking_interrupt(&self) {
+        println!("Kernel handle Networking Interrupt");
+
+        if let Some(driver) = self.networking.as_ref() {
+            println!("Pre-Lock");
+            let mut innter_driver = driver.lock();
+            println!("Post-Lock");
+            innter_driver.handle_interrupt();
+        }
+    }
+
+    pub fn networking(&self) -> Option<&spin::Mutex<device::E1000Driver>> {
+        self.networking.as_ref()
     }
 }

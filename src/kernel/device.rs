@@ -8,12 +8,12 @@ mod e1000;
 
 pub struct NetworkingDevice {}
 
-pub struct E1000Driver {}
+pub struct E1000Driver {
+    ethernet: Ethernet,
+}
 
 impl E1000Driver {
-    pub fn new(device: Device, offset: u64) -> Result<(), ()> {
-        println!("Creating Driver based on Device: {:?}", device);
-
+    pub fn new(device: Device, offset: u64) -> Result<Self, ()> {
         device.enable_bus_mastering();
 
         let card = match device.header_type {
@@ -22,7 +22,6 @@ impl E1000Driver {
                 CardbusCISPointer,
                 interrupt_line,
             } => {
-                println!("Interrupt-Line: 0x{:x}", interrupt_line);
                 let bar = BaseAddresses[0].clone();
 
                 e1000::E1000Card::init(bar, offset)
@@ -31,16 +30,25 @@ impl E1000Driver {
         };
 
         let macaddress = card.read_mac_address();
-        println!("Mac-Address: {:?}", macaddress);
 
-        let mut eth = Ethernet::new(card);
+        let eth = Ethernet::new(card);
 
-        // Send ARP Requests for IP-Address 192.168.178.20
-        for _ in 0..20 {
-            send_arp(&mut eth, [192, 168, 178, 20]);
-        }
+        Ok(Self { ethernet: eth })
+    }
 
-        Ok(())
+    pub fn eth(&mut self) -> &mut Ethernet {
+        &mut self.ethernet
+    }
+
+    pub fn enable_interrupts(&mut self) {
+        self.ethernet.card.enable_interrupts();
+    }
+
+    pub fn handle_interrupt(&mut self) {
+        println!("E1000 Handle Interrupt");
+
+        let card = &mut self.ethernet.card;
+        card.handle_interrupt();
     }
 }
 
@@ -74,25 +82,25 @@ impl Ethernet {
 
         self.card.send_packet(&final_buffer);
     }
+
+    pub fn send_arp(&mut self, ip: [u8; 4]) {
+        let mac = self.get_mac();
+
+        self.send_packet(
+            [0xff, 0xff, 0xff, 0xff, 0xff, 0xff],
+            [0x08, 0x06],
+            &[
+                0, 1, // HType
+                0x08, 0x00, // PType
+                6, 4, // HLen, PLen
+                0, 1, // Request
+                mac[0], mac[1], mac[2], mac[3], mac[4], mac[5], // SHA
+                0, 0, 0, 0, // SPA
+                0, 0, 0, 0, 0, 0, // THA
+                ip[0], ip[1], ip[2], ip[3], // TPA
+            ],
+        );
+    }
 }
 
-pub fn send_arp(eth: &mut Ethernet, ip: [u8; 4]) {
-    let mac = eth.get_mac();
-
-    eth.send_packet(
-        [0xff, 0xff, 0xff, 0xff, 0xff, 0xff],
-        [0x08, 0x06],
-        &[
-            0, 1, // HType
-            0x08, 0x00, // PType
-            6, 4, // HLen, PLen
-            0, 1, // Request
-            mac[0], mac[1], mac[2], mac[3], mac[4], mac[5], // SHA
-            0, 0, 0, 0, // SPA
-            0, 0, 0, 0, 0, 0, // THA
-            ip[0], ip[1], ip[2], ip[3], // TPA
-            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, //
-            0, 0, 0, 0, 0, 0, 0, 0,
-        ],
-    );
-}
+pub fn send_dhcp(eth: &mut Ethernet, dhcp_server: [u8; 4]) {}

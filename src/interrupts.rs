@@ -6,6 +6,7 @@ use x86_64::structures::idt::{InterruptDescriptorTable, InterruptStackFrame, Pag
 use crate::{gdt, hlt_loop, println};
 
 mod keyboard;
+mod networking;
 mod timer;
 pub(crate) use timer::TIMER;
 
@@ -31,7 +32,7 @@ lazy_static! {
         idt[InterruptIndex::Timer.as_usize()].set_handler_fn(timer::timer_interrupt_handler);
         idt[InterruptIndex::Keyboard.as_usize()]
             .set_handler_fn(keyboard::keyboard_interrupt_handler);
-        idt[PIC_1_OFFSET as usize + 0xb].set_handler_fn(network_interrupt);
+        idt[PIC_1_OFFSET as usize + 0xb].set_handler_fn(networking::network_interrupt);
 
         idt
     };
@@ -39,6 +40,11 @@ lazy_static! {
 
 pub fn init_idt() {
     IDT.load();
+
+    // Simply allow ALL the Interrupts
+    unsafe {
+        PICS.lock().write_masks(0x00, 0x00);
+    }
 
     /*
     unsafe {
@@ -49,10 +55,6 @@ pub fn init_idt() {
     unsafe {
         timer::configure_pit();
     }
-}
-
-extern "x86-interrupt" fn network_interrupt(stack_frame: InterruptStackFrame) {
-    println!("Networking");
 }
 
 extern "x86-interrupt" fn breakpoint_handler(stack_frame: InterruptStackFrame) {

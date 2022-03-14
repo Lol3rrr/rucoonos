@@ -52,6 +52,16 @@ fn kernel_main(boot_info: &'static mut bootloader::BootInfo) -> ! {
         }
     }
 
+    if let Some(networking) = kernel.networking() {
+        x86_64::instructions::interrupts::without_interrupts(|| {
+            let mut locked = networking.lock();
+            locked.enable_interrupts();
+
+            let eth = locked.eth();
+            eth.send_arp([10, 0, 2, 0]);
+        });
+    }
+
     #[cfg(not(test))]
     {
         kernel.add_task(tetris()).unwrap();

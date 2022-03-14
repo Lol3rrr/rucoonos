@@ -4,9 +4,11 @@ use x86_64::{structures::paging::Translate, VirtAddr};
 // https://br.mouser.com/datasheet/2/612/i217_ethernet_controller_datasheet-257741.pdf
 
 use crate::{
-    kernel::{pci, MEMORY_MAPPING},
+    kernel::{device::e1000::regs::InterruptCauseRegister, pci, MEMORY_MAPPING},
     println,
 };
+
+use self::regs::IMaskRegister;
 
 pub struct E1000Card {
     com: Coms,
@@ -16,9 +18,12 @@ pub struct E1000Card {
     cur_tx: u32,
 }
 
-const REG_CTRL: u16 = 0x0000;
-const REG_STATUS: u16 = 0x0008;
-const REG_IMASK: u16 = 0x00D0;
+mod regs;
+
+const REG_CTRL: regs::CTRL = regs::CTRL::new();
+const REG_STATUS: regs::STATUS = regs::STATUS::new();
+const REG_IMASK: regs::IMASK = regs::IMASK::new();
+const REG_ICAUSE: regs::INTERRUPT_CAUSE = regs::INTERRUPT_CAUSE::new();
 
 const REG_TCTRL: u16 = 0x400;
 const REG_TXDESCLO: u16 = 0x3800;
@@ -84,7 +89,7 @@ struct tx_desc {
 }
 
 /// A small Abstraction for the Read/Write interactions with the Card
-struct Coms {
+pub(crate) struct Coms {
     bar: pci::BaseAddressRegister,
     offset: u64,
 }
@@ -123,8 +128,8 @@ impl E1000Card {
     pub fn init(bar: pci::BaseAddressRegister, offset: u64) -> Self {
         let coms = Coms { bar, offset };
 
-        let status = coms.read_command(REG_STATUS);
-        println!("Status: 0b{:032b}", status);
+        let status = REG_STATUS.read(&coms);
+        println!("Status: {:?}", status);
 
         // Check for EEPROM
         coms.write_command(0x0014, 0x1);
@@ -243,17 +248,6 @@ impl E1000Card {
             desc_virt_ptr
         };
 
-        {
-            /*
-            coms.write_command(REG_IMASK, 0x1F6DC);
-            coms.write_command(REG_IMASK, 0xff & !4);
-            coms.read_command(0xc0);
-            */
-
-            coms.write_command(0x00d0, 0x04 | 0x80);
-            coms.read_command(0xc0);
-        }
-
         Self {
             com: coms,
             has_eeprom,
@@ -261,6 +255,25 @@ impl E1000Card {
             tx_ptr: tx_desc_ptr,
             cur_tx: 0,
         }
+    }
+
+    pub fn enable_interrupts(&mut self) {
+        //coms.write_command(0x00d0, 0x04 | 0x80);
+        //coms.read_command(0xc0);
+
+        let mut imask_value = regs::IMaskRegister::default();
+
+        imask_value
+            .set_txdw(false)
+            .set_txqe(false)
+            .set_lsc(true)
+            .set_rxdmto(true)
+            .set_rxo(true)
+            .set_rxto(true);
+
+        REG_IMASK.write(&self.com, imask_value);
+
+        self.com.read_command(0xc0);
     }
 
     pub fn read_eeprom(&self, addr: u8) -> u16 {
@@ -329,5 +342,21 @@ impl E1000Card {
         while base_ptr.status & 0xff == 0 {}
 
         self.cur_tx = next_tail;
+    }
+
+    pub fn get_intterupt_cause(&self) -> regs::InterruptCauseRegister {
+        REG_ICAUSE.read(&self.com)
+    }
+
+    pub fn handle_interrupt(&mut self) {
+        let cause = self.get_intterupt_cause();
+
+        if cause.txdw {
+            println!("TX WriteBack");
+
+            println!("New-Cause: {:?}", REG_ICAUSE.read(&self.com));
+
+            return;
+        }
     }
 }

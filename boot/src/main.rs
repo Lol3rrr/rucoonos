@@ -29,21 +29,40 @@ fn main() {
     }
 
     let mut run_cmd = Command::new("qemu-system-x86_64");
-    run_cmd
-        .arg("-drive")
-        .arg(format!("format=raw,file={}", bios.display()))
-        .arg("-device")
-        .arg("VGA")
-        .arg("-device")
-        .arg("isa-debug-exit,iobase=0xf4,iosize=0x04")
-        .arg("-netdev")
-        .arg("tap,id=network0,ifname=tap0,script=./qemu-ifup,downscript=./qemu-ifdown")
-        .arg("-device")
-        .arg("e1000,netdev=network0")
-        .arg("-object")
-        .arg("filter-dump,id=f1,netdev=network0,file=dump.dat")
-        .arg("-serial")
-        .arg("stdio");
+    {
+        run_cmd
+            .arg("-drive")
+            .arg(format!("format=raw,file={}", bios.display()));
+    }
+    {
+        run_cmd.arg("-device").arg("VGA");
+    }
+    {
+        run_cmd
+            .arg("-device")
+            .arg("isa-debug-exit,iobase=0xf4,iosize=0x04");
+    }
+    if false {
+        run_cmd
+            .arg("-netdev")
+            .arg("tap,id=network0,ifname=tap0,script=./qemu-ifup,downscript=./qemu-ifdown")
+            .arg("-device")
+            .arg("e1000,netdev=network0")
+            .arg("-object")
+            .arg("filter-dump,id=f1,netdev=network0,file=dump.dat");
+    } else {
+        run_cmd
+            .arg("-netdev")
+            .arg("user,id=network0")
+            .arg("-device")
+            .arg("e1000,netdev=network0")
+            .arg("-object")
+            .arg("filter-dump,id=f1,netdev=network0,file=dump.dat");
+    }
+    {
+        run_cmd.arg("-serial").arg("stdio");
+    }
+
     run_cmd.args(RUN_ARGS);
 
     let exit_status = run_cmd.status().unwrap();
