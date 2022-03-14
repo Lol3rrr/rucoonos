@@ -320,6 +320,7 @@ pub struct InterruptCauseRegister {
     pub rxdmt: bool,
     pub dsw: bool,
     pub rxo: bool,
+    /// The Receive Timer Interrupt
     pub rxt: bool,
     pub int_asserted: bool,
 }

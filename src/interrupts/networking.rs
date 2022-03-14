@@ -5,7 +5,7 @@ use crate::{interrupts::PIC_1_OFFSET, println, Kernel};
 use super::PICS;
 
 pub extern "x86-interrupt" fn network_interrupt(stack_frame: InterruptStackFrame) {
-    println!("Networking Interrupt");
+    //println!("Networking Interrupt");
 
     let kernel = match Kernel::try_get() {
         Some(k) => k,

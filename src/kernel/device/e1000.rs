@@ -16,7 +16,11 @@ pub struct E1000Card {
     rx_ptr: x86_64::VirtAddr,
     tx_ptr: x86_64::VirtAddr,
     cur_tx: u32,
+    cur_rx: u32,
+    rx_buffers: [*const u8; 32],
 }
+
+unsafe impl Send for E1000Card {}
 
 mod regs;
 
@@ -139,7 +143,7 @@ impl E1000Card {
         const TX_DESC: usize = 8;
 
         // initialize RX stuff
-        let rx_desc_ptrs = {
+        let (rx_desc_ptrs, rx_buffers) = {
             let mut descriptors = [rx_desc {
                 addr: 0,
                 length: 0,
@@ -149,7 +153,9 @@ impl E1000Card {
                 special: 0,
             }; RX_DESC + 1];
 
-            for desc in descriptors.iter_mut() {
+            let mut rx_buffers = [0 as *const u8; RX_DESC];
+
+            for (index, desc) in descriptors.iter_mut().enumerate() {
                 let buffer = Box::new([0u8; 2048 + 16]);
                 let raw_ptr = Box::into_raw(buffer);
                 let virt_ptr = x86_64::VirtAddr::from_ptr(raw_ptr as *const u8);
@@ -161,6 +167,10 @@ impl E1000Card {
 
                 desc.addr = phys_addr.as_u64();
                 desc.status = 0;
+
+                if let Some(target) = rx_buffers.get_mut(index) {
+                    *target = raw_ptr as *const u8;
+                }
             }
 
             let boxed_desc = Box::new(descriptors);
@@ -198,7 +208,7 @@ impl E1000Card {
                     | RCTL_BSIZE_2048,
             );
 
-            desc_virt_ptr
+            (desc_virt_ptr, rx_buffers)
         };
 
         // initialize TX stuff
@@ -254,6 +264,8 @@ impl E1000Card {
             rx_ptr: rx_desc_ptrs,
             tx_ptr: tx_desc_ptr,
             cur_tx: 0,
+            cur_rx: 0,
+            rx_buffers,
         }
     }
 
@@ -267,8 +279,8 @@ impl E1000Card {
             .set_txdw(false)
             .set_txqe(false)
             .set_lsc(true)
-            .set_rxdmto(true)
-            .set_rxo(true)
+            .set_rxdmto(false)
+            .set_rxo(false)
             .set_rxto(true);
 
         REG_IMASK.write(&self.com, imask_value);
@@ -350,13 +362,39 @@ impl E1000Card {
 
     pub fn handle_interrupt(&mut self) {
         let cause = self.get_intterupt_cause();
+        //println!("Cause: {:?}", cause);
 
-        if cause.txdw {
-            println!("TX WriteBack");
+        if cause.rxt {
+            // println!("Receive Timer");
 
-            println!("New-Cause: {:?}", REG_ICAUSE.read(&self.com));
+            loop {
+                let target_ptr =
+                    unsafe { self.rx_ptr.as_ptr::<rx_desc>().add(self.cur_rx as usize) };
+                let mut desc = unsafe { target_ptr.read_volatile() };
 
-            return;
+                if (desc.status & 0b01) == 0 {
+                    break;
+                }
+
+                let len = desc.length;
+                let addr = desc.addr;
+
+                let head = self.com.read_command(REG_RXDESCHEAD);
+                println!("Length: {:?} at Address: {:?}", len, addr);
+
+                desc.status = 0;
+                unsafe {
+                    (target_ptr as *mut rx_desc).write_volatile(desc);
+                }
+
+                let addr = self.rx_buffers[self.cur_rx as usize];
+                let slice = unsafe { core::slice::from_raw_parts(addr, len as usize) };
+                println!("Data: {:?}", slice);
+
+                let old_rx = self.cur_rx;
+                self.cur_rx = (self.cur_rx + 1) % 32;
+                self.com.write_command(REG_RXDESCTAIL, old_rx);
+            }
         }
     }
 }

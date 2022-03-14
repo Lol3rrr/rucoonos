@@ -171,12 +171,12 @@ impl Kernel {
     }
 
     pub fn handle_networking_interrupt(&self) {
-        println!("Kernel handle Networking Interrupt");
+        // println!("Kernel handle Networking Interrupt");
 
         if let Some(driver) = self.networking.as_ref() {
-            println!("Pre-Lock");
+            // println!("Pre-Lock");
             let mut innter_driver = driver.lock();
-            println!("Post-Lock");
+            // println!("Post-Lock");
             innter_driver.handle_interrupt();
         }
     }

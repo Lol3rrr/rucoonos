@@ -45,7 +45,7 @@ impl E1000Driver {
     }
 
     pub fn handle_interrupt(&mut self) {
-        println!("E1000 Handle Interrupt");
+        // println!("E1000 Handle Interrupt");
 
         let card = &mut self.ethernet.card;
         card.handle_interrupt();
@@ -60,6 +60,8 @@ pub struct Ethernet {
 impl Ethernet {
     pub fn new(card: e1000::E1000Card) -> Self {
         let mac = card.read_mac_address();
+
+        println!("Mac-Address: {:?}", mac);
 
         Self {
             mac_address: mac,
