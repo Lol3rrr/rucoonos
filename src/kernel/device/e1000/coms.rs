@@ -1,7 +1,7 @@
 use crate::kernel::pci;
 
 /// A small Abstraction for the Read/Write interactions with the Card
-pub(crate) struct Coms {
+pub struct Coms {
     bar: pci::BaseAddressRegister,
     offset: u64,
 }

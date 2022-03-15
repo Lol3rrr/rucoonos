@@ -1,8 +1,6 @@
-use core::{cell::UnsafeCell, fmt::Debug, mem::MaybeUninit, ops::Index};
+use core::fmt::Debug;
 
 use alloc::boxed::Box;
-
-use crate::println;
 
 pub struct Buffer {
     data: Box<[u8; 2048]>,
@@ -42,27 +40,6 @@ impl AsRef<[u8]> for Buffer {
     }
 }
 
-pub mod ethernet {
-    use super::Buffer;
+pub mod ethernet;
 
-    pub struct Packet {
-        buffer: Buffer,
-    }
-
-    impl Packet {
-        pub fn new(buffer: Buffer) -> Self {
-            Self { buffer }
-        }
-
-        pub fn destination_mac(&self) -> [u8; 6] {
-            self.buffer.as_ref()[0..6].try_into().unwrap()
-        }
-        pub fn source_mac(&self) -> [u8; 6] {
-            self.buffer.as_ref()[6..12].try_into().unwrap()
-        }
-
-        pub fn content(&self) -> &[u8] {
-            &self.buffer.as_ref()[46..(self.buffer.len())]
-        }
-    }
-}
+pub mod arp;

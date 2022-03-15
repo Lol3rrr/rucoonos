@@ -13,7 +13,7 @@ fn address(bus: u8, slot: u8, func: u8, offset: u8) -> u32 {
     let lfunc = func as u32;
     let offset = offset as u32;
 
-    ((lbus << 16) | (lslot << 11) | (lfunc << 8) | (offset & 0xFC) | (0x80000000))
+    (lbus << 16) | (lslot << 11) | (lfunc << 8) | (offset & 0xFC) | (0x80000000)
 }
 
 pub fn read_32bit(bus: u8, slot: u8, func: u8, offset: u8) -> u32 {
@@ -33,9 +33,6 @@ pub fn read_32bit(bus: u8, slot: u8, func: u8, offset: u8) -> u32 {
 pub fn read_word(bus: u8, slot: u8, func: u8, offset: u8) -> u16 {
     let address = address(bus, slot, func, offset);
 
-    let lbus = bus as u32;
-    let lslot = slot as u32;
-    let lfunc = func as u32;
     let offset = offset as u32;
 
     let mut outport = x86_64::instructions::port::Port::new(0xCF8);
@@ -47,7 +44,7 @@ pub fn read_word(bus: u8, slot: u8, func: u8, offset: u8) -> u16 {
         x86_64::instructions::port::Port::new(0xCFC);
     let raw_result: u32 = unsafe { inport.read() };
 
-    let result: u32 = (unsafe { inport.read() } >> ((offset & 2) * 8)) & 0xffff;
+    let result: u32 = (raw_result >> ((offset & 2) * 8)) & 0xffff;
 
     result as u16
 }
@@ -104,7 +101,7 @@ pub enum BaseAddressRegister {
 
 impl From<u32> for BaseAddressRegister {
     fn from(raw: u32) -> Self {
-        match (raw & 0x1) {
+        match raw & 0x1 {
             0 => {
                 let address = raw & 0xfffffff0;
 
@@ -130,8 +127,8 @@ impl From<u32> for BaseAddressRegister {
 #[derive(Debug)]
 pub enum HeaderType {
     Generic {
-        BaseAddresses: [BaseAddressRegister; 6],
-        CardbusCISPointer: u32,
+        base_addresses: [BaseAddressRegister; 6],
+        cardbus_cis_pointer: u32,
         interrupt_line: u8,
     },
     Unknown {
@@ -169,10 +166,9 @@ fn load_device(bus: u8, device: u8) -> Option<Device> {
     let device_id = read_word(bus, device, function, 0x2);
 
     let second_row = read_32bit(bus, device, function, 0x4);
-    println!("Row: 0b{:032b}", second_row);
 
     let baseclass = (read_word(bus, device, function, 0xa) & 0xff00) >> 8;
-    let subclass = (read_word(bus, device, function, 0xa) & 0x00ff);
+    let subclass = read_word(bus, device, function, 0xa) & 0x00ff;
 
     let prog_if = (read_word(bus, device, function, 0x8) & 0xff00) >> 8;
     let revision_id = (read_word(bus, device, function, 0x8) & 0x00ff) as u8;
@@ -217,8 +213,8 @@ fn load_device(bus: u8, device: u8) -> Option<Device> {
             let last_line = read_32bit(bus, device, function, 0x3c);
 
             HeaderType::Generic {
-                BaseAddresses: base_addresses,
-                CardbusCISPointer: cis_poiner,
+                base_addresses,
+                cardbus_cis_pointer: cis_poiner,
                 interrupt_line: (last_line & 0x000000ff) as u8,
             }
         }

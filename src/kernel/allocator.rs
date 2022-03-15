@@ -4,7 +4,7 @@ pub const HEAP_SIZE: usize = 100 * 1024;
 use linked_list_allocator::LockedHeap;
 
 #[global_allocator]
-static ALLOCATOR: LockedHeap = LockedHeap::empty();
+pub(crate) static ALLOCATOR: LockedHeap = LockedHeap::empty();
 
 use x86_64::{
     structures::paging::{

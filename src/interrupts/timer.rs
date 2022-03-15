@@ -2,7 +2,7 @@ use core::arch::asm;
 
 use x86_64::structures::idt::InterruptStackFrame;
 
-use crate::{println, TASKS};
+use crate::TASKS;
 
 use super::{InterruptIndex, PICS};
 

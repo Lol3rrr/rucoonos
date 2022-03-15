@@ -24,7 +24,6 @@ mod kernel;
 pub use kernel::Kernel;
 
 pub mod acpi;
-pub mod allocator;
 pub mod gdt;
 pub mod interrupts;
 pub mod memory;

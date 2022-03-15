@@ -4,7 +4,7 @@ use x86_64::structures::paging::Translate;
 // https://br.mouser.com/datasheet/2/612/i217_ethernet_controller_datasheet-257741.pdf
 
 use crate::{
-    kernel::{networking, pci, MEMORY_MAPPING},
+    kernel::{allocator, pci, MEMORY_MAPPING},
     println,
 };
 
@@ -16,20 +16,22 @@ pub struct E1000Card {
     cur_tx: u32,
     cur_rx: u32,
     rx_buffers: [*const u8; 32],
+    packet_queue: PacketQueueReceiver,
 }
 
 unsafe impl Send for E1000Card {}
 
 mod coms;
+mod descriptors;
 mod regs;
 pub(crate) use coms::Coms;
 
-use super::{NetworkingCtx, NetworkingDevice};
+use super::{NetworkingCtx, NetworkingDevice, PacketQueueReceiver};
 
 const REG_CTRL: regs::CTRL = regs::CTRL::new();
 const REG_STATUS: regs::STATUS = regs::STATUS::new();
 const REG_IMASK: regs::IMASK = regs::IMASK::new();
-const REG_ICAUSE: regs::INTERRUPT_CAUSE = regs::INTERRUPT_CAUSE::new();
+const REG_ICAUSE: regs::InterruptCause = regs::InterruptCause::new();
 
 const REG_TCTRL: u16 = 0x400;
 const REG_TXDESCLO: u16 = 0x3800;
@@ -73,7 +75,7 @@ const CMD_RS: u8 = 1 << 3;
 
 #[derive(Debug, Clone, Copy)]
 #[repr(packed)]
-struct rx_desc {
+struct RxDesc {
     addr: u64,
     length: u16,
     checksum: u16,
@@ -82,9 +84,22 @@ struct rx_desc {
     special: u16,
 }
 
+impl Default for RxDesc {
+    fn default() -> Self {
+        Self {
+            addr: 0,
+            length: 0,
+            checksum: 0,
+            status: 0,
+            errors: 0,
+            special: 0,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 #[repr(packed)]
-struct tx_desc {
+struct TxDesc {
     addr: u64,
     length: u16,
     cso: u8,
@@ -94,8 +109,26 @@ struct tx_desc {
     special: u16,
 }
 
+impl Default for TxDesc {
+    fn default() -> Self {
+        Self {
+            addr: 0,
+            length: 0,
+            cso: 0,
+            cmd: 0,
+            status: 0,
+            css: 0,
+            special: 0,
+        }
+    }
+}
+
 impl E1000Card {
-    pub fn init(bar: pci::BaseAddressRegister, offset: u64) -> Self {
+    pub fn init(
+        bar: pci::BaseAddressRegister,
+        offset: u64,
+        packet_queue: PacketQueueReceiver,
+    ) -> Self {
         let coms = Coms::new(bar, offset);
 
         let status = REG_STATUS.read(&coms);
@@ -110,14 +143,7 @@ impl E1000Card {
 
         // initialize RX stuff
         let (rx_desc_ptrs, rx_buffers) = {
-            let mut descriptors = [rx_desc {
-                addr: 0,
-                length: 0,
-                checksum: 0,
-                status: 0,
-                errors: 0,
-                special: 0,
-            }; RX_DESC + 1];
+            let mut descriptors = [RxDesc::default(); RX_DESC + 1];
 
             let mut rx_buffers = [0 as *const u8; RX_DESC];
 
@@ -139,8 +165,9 @@ impl E1000Card {
                 }
             }
 
-            let boxed_desc = Box::new(descriptors);
-            let raw_desc_ptr = Box::into_raw(boxed_desc);
+            // We manually allocate here as we must garantue the correct Layout (size +
+            // alignment)
+            let raw_desc_ptr = descriptors::allocate_buffer(descriptors, &allocator::ALLOCATOR);
             let desc_virt_ptr = x86_64::VirtAddr::from_ptr(raw_desc_ptr);
             let desc_phys_addr = MEMORY_MAPPING
                 .get()
@@ -179,15 +206,7 @@ impl E1000Card {
 
         // initialize TX stuff
         let tx_desc_ptr = {
-            let mut descriptors = [tx_desc {
-                addr: 0,
-                length: 0,
-                status: 0,
-                cso: 0,
-                cmd: 0,
-                css: 0,
-                special: 0,
-            }; TX_DESC + 1];
+            let mut descriptors = [TxDesc::default(); TX_DESC + 1];
 
             for desc in descriptors.iter_mut() {
                 desc.addr = 0;
@@ -195,8 +214,7 @@ impl E1000Card {
                 desc.status = TSTA_DD;
             }
 
-            let boxed_desc = Box::new(descriptors);
-            let raw_desc_ptr = Box::into_raw(boxed_desc);
+            let raw_desc_ptr = descriptors::allocate_buffer(descriptors, &allocator::ALLOCATOR);
             let desc_virt_ptr = x86_64::VirtAddr::from_ptr(raw_desc_ptr);
             let desc_phys_addr = MEMORY_MAPPING
                 .get()
@@ -232,6 +250,7 @@ impl E1000Card {
             cur_tx: 0,
             cur_rx: 0,
             rx_buffers,
+            packet_queue,
         }
     }
 
@@ -297,67 +316,11 @@ impl E1000Card {
         REG_ICAUSE.read(&self.com)
     }
 
-    pub fn handle(&self, buffer: networking::Buffer, ctx: &NetworkingCtx) {
-        let eth_packet = networking::ethernet::Packet::new(buffer);
-        println!(
-            "Src: {:?} - Dest: {:?}",
-            eth_packet.source_mac(),
-            eth_packet.destination_mac(),
-        );
-
-        let destination = eth_packet.destination_mac();
-        if destination != [0xff, 0xff, 0xff, 0xff, 0xff, 0xff]
-            && destination != self.read_mac_address()
-        {
-            return;
-        }
-
-        println!("Content: {:?}", eth_packet.content());
-    }
-}
-
-impl NetworkingDevice for E1000Card {
-    fn handles_interrupt(&self, irq_offset: u8) -> bool {
-        irq_offset == 0xb
-    }
-
-    fn handle_interrupt(&mut self, ctx: &NetworkingCtx) {
-        let cause = self.get_intterupt_cause();
-
-        if cause.rxt {
-            loop {
-                let target_ptr =
-                    unsafe { self.rx_ptr.as_ptr::<rx_desc>().add(self.cur_rx as usize) };
-                let mut desc = unsafe { target_ptr.read_volatile() };
-
-                if (desc.status & 0b01) == 0 {
-                    break;
-                }
-
-                let len = desc.length;
-
-                let addr = self.rx_buffers[self.cur_rx as usize];
-                let slice = unsafe { core::slice::from_raw_parts(addr, len as usize) };
-                let buffer = networking::Buffer::new(slice);
-
-                self.handle(buffer, ctx);
-
-                desc.status = 0;
-                unsafe {
-                    (target_ptr as *mut rx_desc).write_volatile(desc);
-                }
-
-                let old_rx = self.cur_rx;
-                self.cur_rx = (self.cur_rx + 1) % 32;
-                self.com.write_command(REG_RXDESCTAIL, old_rx);
-            }
-        }
-    }
-
-    fn send_packets(&mut self, data: &[u8]) {
+    /*
+    unsafe fn send_packet(&self) {
         let raw_address = self.tx_ptr.as_u64();
         let base_ptr = unsafe {
-            &mut *(((raw_address as usize) as *const tx_desc as *mut tx_desc)
+            &mut *(((raw_address as usize) as *const TxDesc as *mut TxDesc)
                 .add(self.cur_tx as usize))
         };
 
@@ -377,5 +340,56 @@ impl NetworkingDevice for E1000Card {
         while base_ptr.status & 0xff == 0 {}
 
         self.cur_tx = next_tail;
+    }
+    */
+}
+
+impl NetworkingDevice for E1000Card {
+    fn handles_interrupt(&self, irq_offset: u8) -> bool {
+        irq_offset == 0xb
+    }
+
+    fn handle_interrupt(&mut self, ctx: &NetworkingCtx) {
+        let cause = self.get_intterupt_cause();
+
+        if cause.rxt {
+            loop {
+                let target_ptr =
+                    unsafe { self.rx_ptr.as_ptr::<RxDesc>().add(self.cur_rx as usize) };
+                let mut desc = unsafe { target_ptr.read_volatile() };
+
+                if (desc.status & 0b01) == 0 {
+                    break;
+                }
+
+                let len = desc.length;
+
+                let addr = self.rx_buffers[self.cur_rx as usize];
+                let slice = unsafe { core::slice::from_raw_parts(addr, len as usize) };
+
+                ctx.handle_packet(slice, self.read_mac_address());
+
+                desc.status = 0;
+                unsafe {
+                    (target_ptr as *mut RxDesc).write_volatile(desc);
+                }
+
+                let old_rx = self.cur_rx;
+                self.cur_rx = (self.cur_rx + 1) % 32;
+                self.com.write_command(REG_RXDESCTAIL, old_rx);
+            }
+        }
+
+        if cause.txqe {
+            println!("Empty Queue");
+            match unsafe { self.packet_queue.dequeue() } {
+                Some(packet) => {
+                    println!("Send Ethernet Packet");
+                }
+                None => {
+                    println!("No Packet to send");
+                }
+            };
+        }
     }
 }

@@ -1,27 +1,39 @@
 use core::marker::PhantomData;
 
-use crate::kernel::pci;
-
 use super::Coms;
 
+/// Marks a Register as Writeable
 pub trait WriteableRegister {}
+/// Marks a Register as Readable
 pub trait ReadableRegister {}
 
+/// Marker that a Register is Read-Write
 pub struct RegisterRW {}
+/// Marker that a Register is Read-Only
 pub struct RegisterRO {}
+/// Marker that a Register is Write-Only
 pub struct RegisterWO {}
 
+// The corresponding Trait-impsl to get the Markers working correctly
 impl WriteableRegister for RegisterWO {}
 impl WriteableRegister for RegisterRW {}
 impl ReadableRegister for RegisterRW {}
 impl ReadableRegister for RegisterRO {}
 
-pub(crate) struct Register<const N: u16, T, RT> {
+/// A generic Register that enables a more Type-Safe way of interacting with the underlying
+/// Registers of the E1000
+///
+/// # Generics
+/// * ADDR: The Address of the Register
+/// * T: The Type of the Content stored in the Register
+/// * RT: Marker for the capabilities of the Register (RO/RW/WO)
+pub struct Register<const ADDR: u16, T, RT> {
     _phantom: PhantomData<T>,
     _access: PhantomData<RT>,
 }
 
 impl<const N: u16, T, RT> Register<N, T, RT> {
+    /// Creates a new Instance of the Register
     pub const fn new() -> Self {
         Self {
             _phantom: PhantomData {},
@@ -44,7 +56,7 @@ impl<const N: u16, T, RT> Register<N, T, RT>
 where
     RT: WriteableRegister,
 {
-    pub fn write_raw(&self, com: &Coms, value: u32) {
+    pub unsafe fn write_raw(&self, com: &Coms, value: u32) {
         com.write_command(N, value);
     }
 }
@@ -54,11 +66,14 @@ where
     RT: WriteableRegister,
 {
     pub fn write(&self, com: &Coms, value: T) {
-        self.write_raw(com, value.into());
+        unsafe {
+            self.write_raw(com, value.into());
+        }
     }
 }
 
-pub(crate) type CTRL = Register<0x0000, CtrlRegister, RegisterRW>;
+/// The Control-Register
+pub type CTRL = Register<0x0000, CtrlRegister, RegisterRW>;
 
 /// Defined on Pages 170-171
 #[derive(Debug)]
@@ -169,23 +184,24 @@ impl Default for CtrlRegister {
     }
 }
 
+/// The Status Register
 pub(crate) type STATUS = Register<0x0008, StatusRegister, RegisterRO>;
 
 /// Defined on Pages 172-173
 #[derive(Debug)]
 pub struct StatusRegister {
-    full_duplex: bool,
-    link_up: bool,
-    phy_type_indication: u8,
-    transmition_paused: bool,
-    phy_power_up: bool,
-    link_speed: u8,
-    master_read_completions_blocked: bool,
-    lan_init_done: bool,
-    phy_reset_asserted: bool,
-    master_enable_status: bool,
-    pcim_function_state: bool,
-    clock_control_quarter: bool,
+    pub full_duplex: bool,
+    pub link_up: bool,
+    pub phy_type_indication: u8,
+    pub transmition_paused: bool,
+    pub phy_power_up: bool,
+    pub link_speed: u8,
+    pub master_read_completions_blocked: bool,
+    pub lan_init_done: bool,
+    pub phy_reset_asserted: bool,
+    pub master_enable_status: bool,
+    pub pcim_function_state: bool,
+    pub clock_control_quarter: bool,
 }
 
 impl From<u32> for StatusRegister {
@@ -310,7 +326,7 @@ impl IMaskRegister {
     }
 }
 
-pub(crate) type INTERRUPT_CAUSE = Register<0x00c8, InterruptCauseRegister, RegisterRW>;
+pub(crate) type InterruptCause = Register<0x00c8, InterruptCauseRegister, RegisterRW>;
 
 #[derive(Debug)]
 pub struct InterruptCauseRegister {

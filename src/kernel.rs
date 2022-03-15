@@ -2,7 +2,7 @@ use core::future::Future;
 
 use crate::{
     acpi::{self, OffsetMapper, RSDT},
-    allocator, gdt, interrupts,
+    gdt, interrupts,
     memory::{self, BootInfoFrameAllocator},
     println, RUNTIME,
 };
@@ -12,6 +12,7 @@ use bootloader::boot_info::Optional;
 use rucoon::runtime::{AddTaskError, RunError, TaskID};
 use x86_64::{structures::paging::OffsetPageTable, VirtAddr};
 
+mod allocator;
 mod device;
 mod networking;
 mod pci;
