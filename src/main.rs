@@ -52,6 +52,7 @@ fn kernel_main(boot_info: &'static mut bootloader::BootInfo) -> ! {
         }
     }
 
+    /*
     if let Some(networking) = kernel.networking() {
         x86_64::instructions::interrupts::without_interrupts(|| {
             let mut locked = networking.lock();
@@ -61,6 +62,7 @@ fn kernel_main(boot_info: &'static mut bootloader::BootInfo) -> ! {
             eth.send_arp([10, 0, 2, 0]);
         });
     }
+    */
 
     #[cfg(not(test))]
     {

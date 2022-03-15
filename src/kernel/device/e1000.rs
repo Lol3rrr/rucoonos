@@ -1,14 +1,12 @@
 use alloc::boxed::Box;
-use x86_64::{structures::paging::Translate, VirtAddr};
+use x86_64::structures::paging::Translate;
 
 // https://br.mouser.com/datasheet/2/612/i217_ethernet_controller_datasheet-257741.pdf
 
 use crate::{
-    kernel::{device::e1000::regs::InterruptCauseRegister, pci, MEMORY_MAPPING},
+    kernel::{networking, pci, MEMORY_MAPPING},
     println,
 };
-
-use self::regs::IMaskRegister;
 
 pub struct E1000Card {
     com: Coms,
@@ -22,7 +20,11 @@ pub struct E1000Card {
 
 unsafe impl Send for E1000Card {}
 
+mod coms;
 mod regs;
+pub(crate) use coms::Coms;
+
+use super::{NetworkingCtx, NetworkingDevice};
 
 const REG_CTRL: regs::CTRL = regs::CTRL::new();
 const REG_STATUS: regs::STATUS = regs::STATUS::new();
@@ -92,45 +94,9 @@ struct tx_desc {
     special: u16,
 }
 
-/// A small Abstraction for the Read/Write interactions with the Card
-pub(crate) struct Coms {
-    bar: pci::BaseAddressRegister,
-    offset: u64,
-}
-
-impl Coms {
-    pub fn write_command(&self, p_address: u16, value: u32) {
-        match &self.bar {
-            pci::BaseAddressRegister::MemorySpace { address, .. } => {
-                let target_address = *address as u64 + p_address as u64 + self.offset;
-                let target_ptr = target_address as *mut u32;
-                unsafe {
-                    target_ptr.write_volatile(value);
-                }
-            }
-            pci::BaseAddressRegister::IOSpace { address } => {
-                todo!("Write Command to IOSpace Bar");
-            }
-        };
-    }
-
-    pub fn read_command(&self, p_address: u16) -> u32 {
-        match &self.bar {
-            pci::BaseAddressRegister::MemorySpace { address, .. } => {
-                let target_address = *address as u64 + p_address as u64 + self.offset;
-                let target_ptr = target_address as *mut u32;
-                unsafe { target_ptr.read_volatile() }
-            }
-            pci::BaseAddressRegister::IOSpace { address } => {
-                todo!("Read Command to IOSpace Bar")
-            }
-        }
-    }
-}
-
 impl E1000Card {
     pub fn init(bar: pci::BaseAddressRegister, offset: u64) -> Self {
-        let coms = Coms { bar, offset };
+        let coms = Coms::new(bar, offset);
 
         let status = REG_STATUS.read(&coms);
         println!("Status: {:?}", status);
@@ -312,10 +278,6 @@ impl E1000Card {
             let second2 = self.read_eeprom(1);
             let third2 = self.read_eeprom(2);
 
-            let first_parts = first2.to_le_bytes();
-            let second_parts = second2.to_le_bytes();
-            let third_parts = third2.to_le_bytes();
-
             let address = [
                 (first2 & 0xff) as u8,
                 (first2 >> 8) as u8,
@@ -331,7 +293,68 @@ impl E1000Card {
         }
     }
 
-    pub fn send_packet(&mut self, data: &[u8]) {
+    pub fn get_intterupt_cause(&self) -> regs::InterruptCauseRegister {
+        REG_ICAUSE.read(&self.com)
+    }
+
+    pub fn handle(&self, buffer: networking::Buffer, ctx: &NetworkingCtx) {
+        let eth_packet = networking::ethernet::Packet::new(buffer);
+        println!(
+            "Src: {:?} - Dest: {:?}",
+            eth_packet.source_mac(),
+            eth_packet.destination_mac(),
+        );
+
+        let destination = eth_packet.destination_mac();
+        if destination != [0xff, 0xff, 0xff, 0xff, 0xff, 0xff]
+            && destination != self.read_mac_address()
+        {
+            return;
+        }
+
+        println!("Content: {:?}", eth_packet.content());
+    }
+}
+
+impl NetworkingDevice for E1000Card {
+    fn handles_interrupt(&self, irq_offset: u8) -> bool {
+        irq_offset == 0xb
+    }
+
+    fn handle_interrupt(&mut self, ctx: &NetworkingCtx) {
+        let cause = self.get_intterupt_cause();
+
+        if cause.rxt {
+            loop {
+                let target_ptr =
+                    unsafe { self.rx_ptr.as_ptr::<rx_desc>().add(self.cur_rx as usize) };
+                let mut desc = unsafe { target_ptr.read_volatile() };
+
+                if (desc.status & 0b01) == 0 {
+                    break;
+                }
+
+                let len = desc.length;
+
+                let addr = self.rx_buffers[self.cur_rx as usize];
+                let slice = unsafe { core::slice::from_raw_parts(addr, len as usize) };
+                let buffer = networking::Buffer::new(slice);
+
+                self.handle(buffer, ctx);
+
+                desc.status = 0;
+                unsafe {
+                    (target_ptr as *mut rx_desc).write_volatile(desc);
+                }
+
+                let old_rx = self.cur_rx;
+                self.cur_rx = (self.cur_rx + 1) % 32;
+                self.com.write_command(REG_RXDESCTAIL, old_rx);
+            }
+        }
+    }
+
+    fn send_packets(&mut self, data: &[u8]) {
         let raw_address = self.tx_ptr.as_u64();
         let base_ptr = unsafe {
             &mut *(((raw_address as usize) as *const tx_desc as *mut tx_desc)
@@ -354,47 +377,5 @@ impl E1000Card {
         while base_ptr.status & 0xff == 0 {}
 
         self.cur_tx = next_tail;
-    }
-
-    pub fn get_intterupt_cause(&self) -> regs::InterruptCauseRegister {
-        REG_ICAUSE.read(&self.com)
-    }
-
-    pub fn handle_interrupt(&mut self) {
-        let cause = self.get_intterupt_cause();
-        //println!("Cause: {:?}", cause);
-
-        if cause.rxt {
-            // println!("Receive Timer");
-
-            loop {
-                let target_ptr =
-                    unsafe { self.rx_ptr.as_ptr::<rx_desc>().add(self.cur_rx as usize) };
-                let mut desc = unsafe { target_ptr.read_volatile() };
-
-                if (desc.status & 0b01) == 0 {
-                    break;
-                }
-
-                let len = desc.length;
-                let addr = desc.addr;
-
-                let head = self.com.read_command(REG_RXDESCHEAD);
-                println!("Length: {:?} at Address: {:?}", len, addr);
-
-                desc.status = 0;
-                unsafe {
-                    (target_ptr as *mut rx_desc).write_volatile(desc);
-                }
-
-                let addr = self.rx_buffers[self.cur_rx as usize];
-                let slice = unsafe { core::slice::from_raw_parts(addr, len as usize) };
-                println!("Data: {:?}", slice);
-
-                let old_rx = self.cur_rx;
-                self.cur_rx = (self.cur_rx + 1) % 32;
-                self.com.write_command(REG_RXDESCTAIL, old_rx);
-            }
-        }
     }
 }
