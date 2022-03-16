@@ -135,7 +135,22 @@ impl<'m> NetworkingCtx<'m> {
 
                 match arp_packet.operation() {
                     arp::Operation::Request => {
-                        println!("Arp-Request for IP: {:?}", arp_packet.dest_ip());
+                        let ip = match self.meta.ip.as_ref() {
+                            Some(i) => i,
+                            None => return,
+                        };
+                        if ip != arp_packet.dest_ip() {
+                            return;
+                        }
+
+                        self.queue.enqueue(
+                            networking::arp::PacketBuilder::new()
+                                .sender(self.meta.mac.clone(), ip.clone())
+                                .destination(arp_packet.src_mac, arp_packet.src_ip)
+                                .operation(networking::arp::Operation::Response)
+                                .finish()
+                                .unwrap(),
+                        );
                     }
                     arp::Operation::Response => {
                         println!("Arp-Response");

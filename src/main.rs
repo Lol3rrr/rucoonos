@@ -54,7 +54,7 @@ fn kernel_main(boot_info: &'static mut bootloader::BootInfo) -> ! {
         }
     }
 
-    if false {
+    if true {
         let mut tmp = Vec::new();
         kernel.with_networking_device(|dev| {
             let func = dev.blocking_init().unwrap();
@@ -73,6 +73,7 @@ fn kernel_main(boot_info: &'static mut bootloader::BootInfo) -> ! {
         println!("Device-IP: {:?}", meta.ip);
 
         // Send a basic ARP Probe for 192.168.178.1
+        /*
         sender.enqueue(
             networking::arp::PacketBuilder::new()
                 .sender(meta.mac.clone(), [0, 0, 0, 0])
@@ -81,6 +82,7 @@ fn kernel_main(boot_info: &'static mut bootloader::BootInfo) -> ! {
                 .finish()
                 .unwrap(),
         );
+        */
 
         // Send an empty UDP Packet
         sender.enqueue(
