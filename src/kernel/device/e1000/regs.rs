@@ -235,6 +235,10 @@ pub struct IMaskRegister {
     dsw: bool,
     rxo: bool,
     rxto: bool,
+    mdac: bool,
+    phyint: bool,
+    lsecpn: bool,
+    txd_low: bool,
 }
 
 impl From<u32> for IMaskRegister {
@@ -247,6 +251,10 @@ impl From<u32> for IMaskRegister {
             dsw: ((raw >> 5) & 0b01) != 0,
             rxo: ((raw >> 6) & 0b01) != 0,
             rxto: ((raw >> 7) & 0b01) != 0,
+            mdac: ((raw >> 9) & 0b01) != 0,
+            phyint: ((raw >> 12) & 0b01) != 0,
+            lsecpn: ((raw >> 14) & 0b01) != 0,
+            txd_low: ((raw >> 15) & 0b01) != 0,
         }
     }
 }
@@ -276,6 +284,18 @@ impl Into<u32> for IMaskRegister {
         if self.rxto {
             result |= 1 << 7;
         }
+        if self.mdac {
+            result |= 1 << 9;
+        }
+        if self.phyint {
+            result |= 1 << 12;
+        }
+        if self.lsecpn {
+            result |= 1 << 14;
+        }
+        if self.txd_low {
+            result |= 1 << 15;
+        }
 
         result
     }
@@ -291,6 +311,10 @@ impl Default for IMaskRegister {
             dsw: false,
             rxo: false,
             rxto: false,
+            mdac: false,
+            phyint: false,
+            lsecpn: false,
+            txd_low: false,
         }
     }
 }
@@ -324,11 +348,27 @@ impl IMaskRegister {
         self.rxto = value;
         self
     }
+    pub fn set_mdac(&mut self, value: bool) -> &mut Self {
+        self.mdac = value;
+        self
+    }
+    pub fn set_phyint(&mut self, value: bool) -> &mut Self {
+        self.phyint = value;
+        self
+    }
+    pub fn set_lsecpn(&mut self, value: bool) -> &mut Self {
+        self.lsecpn = value;
+        self
+    }
+    pub fn set_txd_low(&mut self, value: bool) -> &mut Self {
+        self.txd_low = value;
+        self
+    }
 }
 
-pub(crate) type InterruptCause = Register<0x00c8, InterruptCauseRegister, RegisterRW>;
+pub(crate) type InterruptCause = Register<0x00c0, InterruptCauseRegister, RegisterRW>;
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub struct InterruptCauseRegister {
     pub txdw: bool,
     pub txqe: bool,
@@ -338,6 +378,7 @@ pub struct InterruptCauseRegister {
     pub rxo: bool,
     /// The Receive Timer Interrupt
     pub rxt: bool,
+    pub txd_low: bool,
     pub int_asserted: bool,
 }
 
@@ -351,6 +392,7 @@ impl From<u32> for InterruptCauseRegister {
             dsw: ((raw >> 5) & 0b01) != 0,
             rxo: ((raw >> 6) & 0b01) != 0,
             rxt: ((raw >> 7) & 0b01) != 0,
+            txd_low: ((raw >> 15) & 0b01) != 0,
             int_asserted: ((raw >> 31) & 0b01) != 0,
         }
     }
@@ -381,6 +423,9 @@ impl Into<u32> for InterruptCauseRegister {
         if self.rxt {
             result |= 1 << 7;
         }
+        if self.txd_low {
+            result |= 1 << 15;
+        }
         if self.int_asserted {
             result |= 1 << 31;
         }
@@ -399,6 +444,7 @@ impl Default for InterruptCauseRegister {
             dsw: false,
             rxo: false,
             rxt: false,
+            txd_low: false,
             int_asserted: false,
         }
     }
@@ -411,6 +457,14 @@ impl InterruptCauseRegister {
     }
     pub fn set_txqe(&mut self, value: bool) -> &mut Self {
         self.txqe = value;
+        self
+    }
+    pub fn set_txd_low(&mut self, value: bool) -> &mut Self {
+        self.txd_low = value;
+        self
+    }
+    pub fn set_asserted(&mut self, value: bool) -> &mut Self {
+        self.int_asserted = value;
         self
     }
 }

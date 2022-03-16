@@ -29,6 +29,15 @@ impl From<u16> for Operation {
         }
     }
 }
+impl Into<u16> for Operation {
+    fn into(self) -> u16 {
+        match self {
+            Self::Request => 1,
+            Self::Response => 2,
+            Self::Unknown(unknown) => unknown,
+        }
+    }
+}
 
 impl Packet {
     pub fn new(eth: ethernet::Packet) -> Result<Self, ()> {
@@ -114,11 +123,11 @@ impl PacketBuilder<SenderState> {
     }
 }
 impl PacketBuilder<DestinationState> {
-    pub fn operation(self, operation: u16) -> PacketBuilder<OperationState> {
+    pub fn operation(self, operation: Operation) -> PacketBuilder<OperationState> {
         PacketBuilder {
             state: OperationState {
                 destination: self.state,
-                operation,
+                operation: operation.into(),
             },
         }
     }

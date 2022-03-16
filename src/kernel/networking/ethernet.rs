@@ -130,7 +130,7 @@ impl PacketBuilder<EtherTypeState> {
         let written_len = payload(&mut content[14..])?;
         let len = core::cmp::max(written_len, 46);
 
-        let buffer = Buffer::new(&content[0..len]);
+        let buffer = Buffer::new(&content[0..(len + 14)]);
         Ok(Packet::new(buffer))
     }
 }

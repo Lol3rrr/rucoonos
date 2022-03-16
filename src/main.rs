@@ -9,6 +9,8 @@ extern crate alloc;
 
 use core::panic::PanicInfo;
 
+use alloc::vec::Vec;
+use rucoonos::kernel::networking;
 use rucoonos::*;
 
 /// This function is called on panic.
@@ -52,17 +54,53 @@ fn kernel_main(boot_info: &'static mut bootloader::BootInfo) -> ! {
         }
     }
 
-    /*
-    if let Some(networking) = kernel.networking() {
-        x86_64::instructions::interrupts::without_interrupts(|| {
-            let mut locked = networking.lock();
-            locked.enable_interrupts();
-
-            let eth = locked.eth();
-            eth.send_arp([10, 0, 2, 0]);
+    if false {
+        let mut tmp = Vec::new();
+        kernel.with_networking_device(|dev| {
+            let func = dev.blocking_init().unwrap();
+            tmp.push(func);
         });
+
+        for init in tmp {
+            init();
+        }
     }
-    */
+
+    kernel.with_networking_device(|device| {
+        let sender = &device.packet_queue;
+        let meta = &device.metadata;
+
+        println!("Device-IP: {:?}", meta.ip);
+
+        // Send a basic ARP Probe for 192.168.178.1
+        sender.enqueue(
+            networking::arp::PacketBuilder::new()
+                .sender(meta.mac.clone(), [0, 0, 0, 0])
+                .destination([0, 0, 0, 0, 0, 0], [192, 168, 178, 1])
+                .operation(networking::arp::Operation::Request)
+                .finish()
+                .unwrap(),
+        );
+
+        // Send an empty UDP Packet
+        sender.enqueue(
+            networking::udp::PacketBuilder::new()
+                .source_port(meta.mac.clone(), [0, 0, 0, 0], 68)
+                .destination_port(
+                    [0xff, 0xff, 0xff, 0xff, 0xff, 0xff],
+                    [255, 255, 255, 255],
+                    67,
+                )
+                .finish(
+                    |buffer| {
+                        // TODO
+                        Ok(0)
+                    },
+                    || 0,
+                )
+                .unwrap(),
+        );
+    });
 
     #[cfg(not(test))]
     {

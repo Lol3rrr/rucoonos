@@ -39,6 +39,7 @@ const REG_TXDESCHI: u16 = 0x3804;
 const REG_TXDESCLEN: u16 = 0x3808;
 const REG_TXDESCHEAD: u16 = 0x3810;
 const REG_TXDESCTAIL: u16 = 0x3818;
+const REG_TXDESCCTRL: u16 = 0x3828;
 
 const REG_RCTRL: u16 = 0x0100;
 const REG_RXDESCLO: u16 = 0x2800;
@@ -123,23 +124,24 @@ impl Default for TxDesc {
     }
 }
 
+// The Number of RX Descriptors
+const RX_DESC: usize = 32;
+// The Number of TX Descriptors
+const TX_DESC: usize = 8;
+
 impl E1000Card {
     pub fn init(
         bar: pci::BaseAddressRegister,
         offset: u64,
         packet_queue: PacketQueueReceiver,
-    ) -> Self {
+    ) -> (Self, impl Fn()) {
         let coms = Coms::new(bar, offset);
 
         let status = REG_STATUS.read(&coms);
-        println!("Status: {:?}", status);
 
         // Check for EEPROM
         coms.write_command(0x0014, 0x1);
         let has_eeprom = (0..1000).any(|_| coms.read_command(0x0014) & 0x10 > 0);
-
-        const RX_DESC: usize = 32;
-        const TX_DESC: usize = 8;
 
         // initialize RX stuff
         let (rx_desc_ptrs, rx_buffers) = {
@@ -242,31 +244,46 @@ impl E1000Card {
             desc_virt_ptr
         };
 
-        Self {
-            com: coms,
-            has_eeprom,
-            rx_ptr: rx_desc_ptrs,
-            tx_ptr: tx_desc_ptr,
-            cur_tx: 0,
-            cur_rx: 0,
-            rx_buffers,
-            packet_queue,
-        }
+        (
+            Self {
+                com: coms.clone(),
+                has_eeprom,
+                rx_ptr: rx_desc_ptrs,
+                tx_ptr: tx_desc_ptr,
+                cur_tx: 0,
+                cur_rx: 0,
+                rx_buffers,
+                packet_queue,
+            },
+            move || {
+                let mut cause = regs::InterruptCauseRegister::default();
+                cause.set_txd_low(true).set_asserted(false);
+
+                coms.write_command(0xc8, cause.into());
+            },
+        )
     }
 
     pub fn enable_interrupts(&mut self) {
         //coms.write_command(0x00d0, 0x04 | 0x80);
         //coms.read_command(0xc0);
 
+        // Set the TX-Threshold to 1
+        self.com.write_command(REG_TXDESCCTRL, 0 | (2 << 25));
+
+        // Throttle to 500 * 256ns
+        // self.com.write_command(0xc4, 500);
+
         let mut imask_value = regs::IMaskRegister::default();
 
         imask_value
-            .set_txdw(false)
+            .set_txdw(true)
             .set_txqe(false)
             .set_lsc(true)
             .set_rxdmto(false)
             .set_rxo(false)
-            .set_rxto(true);
+            .set_rxto(true)
+            .set_txd_low(true);
 
         REG_IMASK.write(&self.com, imask_value);
 
@@ -345,7 +362,7 @@ impl NetworkingDevice for E1000Card {
         irq_offset == 0xb
     }
 
-    fn handle_interrupt(&mut self, ctx: &NetworkingCtx) {
+    fn handle_interrupt(&mut self, ctx: &mut NetworkingCtx) {
         let cause = self.get_intterupt_cause();
 
         if cause.rxt {
@@ -363,7 +380,7 @@ impl NetworkingDevice for E1000Card {
                 let addr = self.rx_buffers[self.cur_rx as usize];
                 let slice = unsafe { core::slice::from_raw_parts(addr, len as usize) };
 
-                ctx.handle_packet(slice, self.read_mac_address());
+                ctx.handle_packet(slice);
 
                 desc.status = 0;
                 unsafe {
@@ -371,7 +388,7 @@ impl NetworkingDevice for E1000Card {
                 }
 
                 let old_rx = self.cur_rx;
-                self.cur_rx = (self.cur_rx + 1) % 32;
+                self.cur_rx = (self.cur_rx + 1) % (RX_DESC as u32);
                 self.com.write_command(REG_RXDESCTAIL, old_rx);
             }
         }
@@ -379,20 +396,22 @@ impl NetworkingDevice for E1000Card {
         let cur_head = self.com.read_command(REG_TXDESCHEAD);
         let cur_tail = self.com.read_command(REG_TXDESCTAIL);
 
-        if cur_head == cur_tail {
-            match unsafe { self.packet_queue.dequeue() } {
-                Some(packet) => {
-                    println!("Send Ethernet Packet");
-                    let buffer = packet.into_buffer();
-                    let (data_ptr, len) = buffer.into_raw();
-                    unsafe {
-                        self.enqueue_packet(data_ptr, len);
+        if cur_head == cur_tail && (cause.txd_low || cause.txdw) {
+            for _ in 0..TX_DESC {
+                match unsafe { self.packet_queue.dequeue() } {
+                    Some(packet) => {
+                        println!("Send Ethernet Packet");
+                        let buffer = packet.into_buffer();
+                        let (data_ptr, len) = buffer.into_raw();
+                        unsafe {
+                            self.enqueue_packet(data_ptr, len);
+                        }
                     }
-                }
-                None => {
-                    // println!("No Packet to send");
-                }
-            };
+                    None => {
+                        break;
+                    }
+                };
+            }
         }
     }
 }

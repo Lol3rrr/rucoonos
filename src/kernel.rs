@@ -13,8 +13,8 @@ use rucoon::runtime::{AddTaskError, RunError, TaskID};
 use x86_64::{structures::paging::OffsetPageTable, VirtAddr};
 
 mod allocator;
-mod device;
-mod networking;
+pub mod device;
+pub mod networking;
 mod pci;
 
 static MEMORY_MAPPING: spin::Once<OffsetPageTable> = spin::Once::new();
@@ -116,7 +116,13 @@ impl Kernel {
                     println!("E1000 Networking Controller: {:?}", header);
 
                     match device::E1000Driver::new(header, offset) {
-                        Ok(n_device) => Some(device::Device::Network(Box::new(n_device))),
+                        Ok((n_device, meta, n_queue)) => {
+                            Some(device::Device::Network(device::NetworkDevice {
+                                device: Box::new(n_device),
+                                metadata: meta,
+                                packet_queue: n_queue,
+                            }))
+                        }
                         Err(_) => None,
                     }
                 } else {
@@ -181,8 +187,13 @@ impl Kernel {
 
         let mut devices = self.devices.lock();
         for device in devices.iter_mut() {
-            let n_device = match device {
-                device::Device::Network(d) => d,
+            let (n_device, meta, queue) = match device {
+                device::Device::Network(device::NetworkDevice {
+                    device,
+                    metadata,
+                    packet_queue,
+                    ..
+                }) => (device, metadata, packet_queue),
                 _ => continue,
             };
 
@@ -190,8 +201,25 @@ impl Kernel {
                 continue;
             }
 
-            let ctx = device::NetworkingCtx {};
-            n_device.handle_interrupt(&ctx);
+            let mut ctx = device::NetworkingCtx { meta, queue };
+            n_device.handle_interrupt(&mut ctx);
         }
+    }
+
+    pub fn with_networking_device<F>(&self, mut func: F)
+    where
+        F: FnMut(&mut device::NetworkDevice),
+    {
+        x86_64::instructions::interrupts::without_interrupts(|| {
+            let mut devices = self.devices.lock();
+            let iter = devices.iter_mut().filter_map(|dev| match dev {
+                device::Device::Network(dev) => Some(dev),
+                _ => None,
+            });
+
+            for dev in iter {
+                func(dev);
+            }
+        });
     }
 }

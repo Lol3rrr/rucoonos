@@ -20,7 +20,7 @@ extern crate alloc;
 
 use core::panic::PanicInfo;
 
-mod kernel;
+pub mod kernel;
 pub use kernel::Kernel;
 
 pub mod acpi;

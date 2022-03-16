@@ -5,6 +5,35 @@ pub struct Packet {
 }
 
 #[derive(Debug, Clone, Copy)]
+pub enum Protocol {
+    Icmp,
+    Udp,
+    Tcp,
+    Unknown(u8),
+}
+
+impl Into<u8> for Protocol {
+    fn into(self) -> u8 {
+        match self {
+            Self::Icmp => 1,
+            Self::Udp => 17,
+            Self::Tcp => 6,
+            Self::Unknown(proto) => proto,
+        }
+    }
+}
+impl From<u8> for Protocol {
+    fn from(raw: u8) -> Self {
+        match raw {
+            1 => Self::Icmp,
+            6 => Self::Tcp,
+            17 => Self::Udp,
+            unknown => Self::Unknown(unknown),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
 pub struct PacketHeader {
     version: u8,
     ihl: u8,
@@ -15,7 +44,7 @@ pub struct PacketHeader {
     flags: u8,
     fragment_offset: u16,
     ttl: u8,
-    protocol: u8,
+    pub protocol: Protocol,
     header_checksum: u16,
     source_ip: [u8; 4],
     destination_ip: [u8; 4],
@@ -55,7 +84,7 @@ impl PacketHeader {
         (&mut target[6..8]).copy_from_slice(&self.fragment_offset.to_be_bytes());
         target[6] |= self.flags << 5;
         target[8] = self.ttl;
-        target[9] = self.protocol;
+        target[9] = self.protocol.into();
         (&mut target[10..12]).copy_from_slice(&self.header_checksum.to_be_bytes());
         (&mut target[12..16]).copy_from_slice(&self.source_ip);
         (&mut target[16..20]).copy_from_slice(&self.destination_ip);
@@ -86,7 +115,7 @@ impl Packet {
             flags: header_data[7] >> 5,
             fragment_offset: u16::from_be_bytes([header_data[7] & 0x1f, header_data[8]]),
             ttl: header_data[8],
-            protocol: header_data[9],
+            protocol: (header_data[9]).into(),
             header_checksum: u16::from_be_bytes(header_data[10..12].try_into().unwrap()),
             source_ip: header_data[12..16].try_into().unwrap(),
             destination_ip: header_data[16..20].try_into().unwrap(),
@@ -118,13 +147,13 @@ pub struct ProtocolState {
     dscp: u8,
     ident: u16,
     ttl: u8,
-    protocol: u8,
+    protocol: Protocol,
 }
 pub struct SourceState {
     dscp: u8,
     ident: u16,
     ttl: u8,
-    protocol: u8,
+    protocol: Protocol,
     source: [u8; 4],
     source_mac: [u8; 6],
 }
@@ -132,7 +161,7 @@ pub struct DestinationState {
     dscp: u8,
     ident: u16,
     ttl: u8,
-    protocol: u8,
+    protocol: Protocol,
     source: [u8; 4],
     source_mac: [u8; 6],
     destination: [u8; 4],
@@ -178,7 +207,7 @@ impl PacketBuilder<IdentificationState> {
     }
 }
 impl PacketBuilder<TTLState> {
-    pub fn protocol(self, protocol: u8) -> PacketBuilder<ProtocolState> {
+    pub fn protocol(self, protocol: Protocol) -> PacketBuilder<ProtocolState> {
         PacketBuilder {
             state: ProtocolState {
                 dscp: self.state.dscp,
@@ -239,7 +268,7 @@ impl PacketBuilder<DestinationState> {
                     ihl: 5,
                     dscp: self.state.dscp,
                     ecn: 0,
-                    total_length: 20 + payload_size() as u16,
+                    total_length: (20 + payload_size()) as u16,
                     identification: self.state.ident,
                     flags: 0,
                     fragment_offset: 0,
@@ -253,7 +282,8 @@ impl PacketBuilder<DestinationState> {
 
                 header.to_bytes(&mut eth_payload[0..20]).unwrap();
 
-                let _ = payload(&mut eth_payload[20..]);
+                let size = payload(&mut eth_payload[20..])?;
+                assert_eq!(size, payload_size());
 
                 Ok(20 + payload_size())
             })

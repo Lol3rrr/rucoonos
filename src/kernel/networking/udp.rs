@@ -4,11 +4,29 @@ pub struct Packet {
     ip_packet: ipv4::Packet,
 }
 
+#[derive(Debug)]
 pub struct PacketHeader {
-    source_port: u16,
-    destination_port: u16,
+    pub source_port: u16,
+    pub destination_port: u16,
     length: u16,
     checksum: u16,
+}
+
+impl TryFrom<&[u8]> for PacketHeader {
+    type Error = ();
+
+    fn try_from(value: &[u8]) -> Result<Self, Self::Error> {
+        if value.len() < 8 {
+            return Err(());
+        }
+
+        Ok(Self {
+            source_port: u16::from_be_bytes(value[0..2].try_into().unwrap()),
+            destination_port: u16::from_be_bytes(value[2..4].try_into().unwrap()),
+            length: u16::from_be_bytes(value[4..6].try_into().unwrap()),
+            checksum: u16::from_be_bytes(value[6..8].try_into().unwrap()),
+        })
+    }
 }
 
 impl PacketHeader {
@@ -23,6 +41,20 @@ impl PacketHeader {
         (&mut buffer[6..8]).copy_from_slice(&self.checksum.to_be_bytes());
 
         Ok(())
+    }
+}
+
+impl Packet {
+    pub fn new(packet: ipv4::Packet) -> Self {
+        Self { ip_packet: packet }
+    }
+
+    pub fn header(&self) -> PacketHeader {
+        (&self.ip_packet.payload()[0..8]).try_into().unwrap()
+    }
+
+    pub fn payload(&self) -> &[u8] {
+        &(self.ip_packet.payload())[8..]
     }
 }
 
@@ -91,7 +123,7 @@ impl PacketBuilder<DestinationPort> {
             .dscp(0)
             .identification(0x1234)
             .ttl(20)
-            .protocol(17)
+            .protocol(ipv4::Protocol::Udp)
             .source(self.state.source_ip, self.state.source_mac)
             .destination(self.state.destination_ip, self.state.destination_mac)
             .finish(
@@ -105,11 +137,12 @@ impl PacketBuilder<DestinationPort> {
 
                     let _ = header.to_bytes(&mut ip_payload[0..8]);
 
-                    let _ = payload(&mut ip_payload[8..]);
+                    let size = payload(&mut ip_payload[8..])?;
+                    assert_eq!(size, payload_size());
 
                     Ok(8 + payload_size())
                 },
-                || 8 + payload_size(),
+                || (8 + payload_size()),
             )
     }
 }
