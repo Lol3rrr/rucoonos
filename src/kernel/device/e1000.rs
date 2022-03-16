@@ -316,8 +316,7 @@ impl E1000Card {
         REG_ICAUSE.read(&self.com)
     }
 
-    /*
-    unsafe fn send_packet(&self) {
+    unsafe fn enqueue_packet(&mut self, data_ptr: *mut [u8], len: usize) {
         let raw_address = self.tx_ptr.as_u64();
         let base_ptr = unsafe {
             &mut *(((raw_address as usize) as *const TxDesc as *mut TxDesc)
@@ -327,21 +326,18 @@ impl E1000Card {
         base_ptr.addr = MEMORY_MAPPING
             .get()
             .unwrap()
-            .translate_addr(x86_64::VirtAddr::from_ptr(data.as_ptr()))
+            .translate_addr(x86_64::VirtAddr::from_ptr(data_ptr as *mut u8))
             .unwrap()
             .as_u64();
-        base_ptr.length = data.len() as u16;
+        base_ptr.length = len as u16;
         base_ptr.cmd = CMD_EOP | CMD_IFCS | CMD_RS;
         base_ptr.status = 0;
 
         let next_tail = (self.cur_tx + 1) % 8;
 
         self.com.write_command(REG_TXDESCTAIL, next_tail);
-        while base_ptr.status & 0xff == 0 {}
-
         self.cur_tx = next_tail;
     }
-    */
 }
 
 impl NetworkingDevice for E1000Card {
@@ -380,14 +376,21 @@ impl NetworkingDevice for E1000Card {
             }
         }
 
-        if cause.txqe {
-            println!("Empty Queue");
+        let cur_head = self.com.read_command(REG_TXDESCHEAD);
+        let cur_tail = self.com.read_command(REG_TXDESCTAIL);
+
+        if cur_head == cur_tail {
             match unsafe { self.packet_queue.dequeue() } {
                 Some(packet) => {
                     println!("Send Ethernet Packet");
+                    let buffer = packet.into_buffer();
+                    let (data_ptr, len) = buffer.into_raw();
+                    unsafe {
+                        self.enqueue_packet(data_ptr, len);
+                    }
                 }
                 None => {
-                    println!("No Packet to send");
+                    // println!("No Packet to send");
                 }
             };
         }

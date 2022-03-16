@@ -46,9 +46,49 @@ impl E1000Driver {
         sender.enqueue(
             networking::arp::PacketBuilder::new()
                 .sender(card.read_mac_address(), [0, 0, 0, 0])
-                .destination([0, 0, 0, 0, 0, 0], [192, 168, 1, 1])
+                .destination([0, 0, 0, 0, 0, 0], [192, 168, 178, 28])
                 .operation(1)
                 .finish()
+                .unwrap(),
+        );
+
+        sender.enqueue(
+            networking::ipv4::PacketBuilder::new()
+                .dscp(0)
+                .identification(123)
+                .ttl(20)
+                .protocol(1)
+                .source([0, 0, 0, 0], card.read_mac_address())
+                .destination([192, 168, 178, 29], [0x0e, 0x80, 0x63, 0x31, 0x73, 0x6a])
+                .finish(
+                    |payload| {
+                        payload[0] = 8;
+                        payload[1] = 0;
+                        payload[2] = 0xf7;
+                        payload[3] = 0xff;
+
+                        Ok(8)
+                    },
+                    || 8,
+                )
+                .unwrap(),
+        );
+
+        sender.enqueue(
+            networking::udp::PacketBuilder::new()
+                .source_port(card.read_mac_address(), [0, 0, 0, 0], 68)
+                .destination_port(
+                    [0xff, 0xff, 0xff, 0xff, 0xff, 0xff],
+                    [255, 255, 255, 255],
+                    67,
+                )
+                .finish(
+                    |buffer| {
+                        // TODO
+                        Ok(0)
+                    },
+                    || 0,
+                )
                 .unwrap(),
         );
 
@@ -64,7 +104,7 @@ impl NetworkingCtx {
 
         let destination = eth_packet.destination_mac();
         if destination != [0xff, 0xff, 0xff, 0xff, 0xff, 0xff] && destination != nic_mac {
-            return;
+            // return;
         }
 
         /*
@@ -96,10 +136,12 @@ impl NetworkingCtx {
                 println!("WakeOnLan: {:?}", eth_packet.content());
             }
             EthType::Ipv4 => {
-                println!("IPv4: {:?}", eth_packet.content());
+                let ip_packet = networking::ipv4::Packet::new(eth_packet);
+
+                println!("IP-Packet: {:?}", ip_packet.header());
             }
             EthType::Ipv6 => {
-                println!("IPv6: {:?}", eth_packet.content());
+                // println!("IPv6: {:?}", eth_packet.content());
             }
             EthType::Unknown(_tag) => {
                 // println!("Unknown({:?}): {:?}", tag, eth_packet.content());

@@ -56,6 +56,10 @@ impl Packet {
     pub fn content(&self) -> &[u8] {
         &self.buffer.as_ref()[14..(self.buffer.len())]
     }
+
+    pub fn into_buffer(self) -> Buffer {
+        self.buffer
+    }
 }
 
 pub struct InitialState {}
@@ -123,7 +127,8 @@ impl PacketBuilder<EtherTypeState> {
         (&mut content[6..12]).copy_from_slice(&self.state.source);
         (&mut content[12..14]).copy_from_slice(&self.state.ether_ty);
 
-        let len = payload(&mut content[14..])?;
+        let written_len = payload(&mut content[14..])?;
+        let len = core::cmp::max(written_len, 46);
 
         let buffer = Buffer::new(&content[0..len]);
         Ok(Packet::new(buffer))

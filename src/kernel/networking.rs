@@ -24,6 +24,10 @@ impl Buffer {
     pub fn len(&self) -> usize {
         self.len
     }
+
+    pub fn into_raw(self) -> (*mut [u8], usize) {
+        (Box::into_raw(self.data), self.len)
+    }
 }
 
 impl Debug for Buffer {
@@ -40,6 +44,7 @@ impl AsRef<[u8]> for Buffer {
     }
 }
 
-pub mod ethernet;
-
 pub mod arp;
+pub mod ethernet;
+pub mod ipv4;
+pub mod udp;
