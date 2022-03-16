@@ -28,6 +28,11 @@ impl Buffer {
     pub fn into_raw(self) -> (*mut [u8], usize) {
         (Box::into_raw(self.data), self.len)
     }
+
+    pub unsafe fn from_raw(ptr: *mut [u8], len: usize) -> Self {
+        let buffer = unsafe { Box::from_raw(ptr as *mut [u8; 2048]) };
+        Self { data: buffer, len }
+    }
 }
 
 impl Debug for Buffer {
@@ -47,5 +52,6 @@ impl AsRef<[u8]> for Buffer {
 pub mod arp;
 pub mod dhcp;
 pub mod ethernet;
+pub mod icmp;
 pub mod ipv4;
 pub mod udp;

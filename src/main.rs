@@ -72,28 +72,19 @@ fn kernel_main(boot_info: &'static mut bootloader::BootInfo) -> ! {
 
         println!("Device-IP: {:?}", meta.ip);
 
-        // Send a basic ARP Probe for 192.168.178.1
-        /*
-        sender.enqueue(
-            networking::arp::PacketBuilder::new()
-                .sender(meta.mac.clone(), [0, 0, 0, 0])
-                .destination([0, 0, 0, 0, 0, 0], [192, 168, 178, 1])
-                .operation(networking::arp::Operation::Request)
-                .finish()
-                .unwrap(),
-        );
-        */
-
         // Send an empty UDP Packet
         sender.enqueue(
             networking::udp::PacketBuilder::new()
-                .source_port(meta.mac.clone(), [0, 0, 0, 0], 68)
-                .destination_port(
-                    [0xff, 0xff, 0xff, 0xff, 0xff, 0xff],
-                    [255, 255, 255, 255],
-                    67,
-                )
+                .source_port(68)
+                .destination_port(67)
                 .finish(
+                    networking::ipv4::PacketBuilder::new()
+                        .dscp(0)
+                        .identification(0x2345)
+                        .ttl(20)
+                        .protocol(networking::ipv4::Protocol::Udp)
+                        .source([0, 0, 0, 0], meta.mac.clone())
+                        .destination([255, 255, 255, 255], [0xff, 0xff, 0xff, 0xff, 0xff, 0xff]),
                     |buffer| {
                         // TODO
                         Ok(0)

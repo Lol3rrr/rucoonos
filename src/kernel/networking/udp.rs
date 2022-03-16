@@ -60,16 +60,10 @@ impl Packet {
 
 pub struct InitialState {}
 pub struct SourcePort {
-    source_mac: [u8; 6],
-    source_ip: [u8; 4],
     source_port: u16,
 }
 pub struct DestinationPort {
-    source_mac: [u8; 6],
-    source_ip: [u8; 4],
     source_port: u16,
-    destination_mac: [u8; 6],
-    destination_ip: [u8; 4],
     destination_port: u16,
 }
 
@@ -84,65 +78,50 @@ impl PacketBuilder<InitialState> {
         }
     }
 
-    pub fn source_port(self, mac: [u8; 6], ip: [u8; 4], port: u16) -> PacketBuilder<SourcePort> {
+    pub fn source_port(self, port: u16) -> PacketBuilder<SourcePort> {
         PacketBuilder {
-            state: SourcePort {
-                source_mac: mac,
-                source_ip: ip,
-                source_port: port,
-            },
+            state: SourcePort { source_port: port },
         }
     }
 }
 impl PacketBuilder<SourcePort> {
-    pub fn destination_port(
-        self,
-        mac: [u8; 6],
-        ip: [u8; 4],
-        port: u16,
-    ) -> PacketBuilder<DestinationPort> {
+    pub fn destination_port(self, port: u16) -> PacketBuilder<DestinationPort> {
         PacketBuilder {
             state: DestinationPort {
-                source_mac: self.state.source_mac,
-                source_ip: self.state.source_ip,
                 source_port: self.state.source_port,
-                destination_mac: mac,
-                destination_ip: ip,
                 destination_port: port,
             },
         }
     }
 }
 impl PacketBuilder<DestinationPort> {
-    pub fn finish<P, S>(self, payload: P, payload_size: S) -> Result<ethernet::Packet, ()>
+    pub fn finish<P, S>(
+        self,
+        ip_packet_builder: ipv4::PacketBuilder<ipv4::DestinationState>,
+        payload: P,
+        payload_size: S,
+    ) -> Result<ethernet::Packet, ()>
     where
         P: FnOnce(&mut [u8]) -> Result<usize, ()>,
         S: Fn() -> usize,
     {
-        ipv4::PacketBuilder::new()
-            .dscp(0)
-            .identification(0x1234)
-            .ttl(20)
-            .protocol(ipv4::Protocol::Udp)
-            .source(self.state.source_ip, self.state.source_mac)
-            .destination(self.state.destination_ip, self.state.destination_mac)
-            .finish(
-                |ip_payload| {
-                    let header = PacketHeader {
-                        source_port: self.state.source_port,
-                        destination_port: self.state.destination_port,
-                        length: (8 + payload_size()) as u16,
-                        checksum: 0,
-                    };
+        ip_packet_builder.finish(
+            |ip_payload| {
+                let header = PacketHeader {
+                    source_port: self.state.source_port,
+                    destination_port: self.state.destination_port,
+                    length: (8 + payload_size()) as u16,
+                    checksum: 0,
+                };
 
-                    let _ = header.to_bytes(&mut ip_payload[0..8]);
+                let _ = header.to_bytes(&mut ip_payload[0..8]);
 
-                    let size = payload(&mut ip_payload[8..])?;
-                    assert_eq!(size, payload_size());
+                let size = payload(&mut ip_payload[8..])?;
+                assert_eq!(size, payload_size());
 
-                    Ok(8 + payload_size())
-                },
-                || (8 + payload_size()),
-            )
+                Ok(8 + payload_size())
+            },
+            || (8 + payload_size()),
+        )
     }
 }

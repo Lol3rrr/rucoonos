@@ -1,6 +1,4 @@
-use crate::println;
-
-use super::{ethernet, udp};
+use super::{ethernet, ipv4, udp};
 
 pub struct Packet {
     datagram: udp::Packet,
@@ -96,13 +94,16 @@ impl Packet {
 
 pub fn discover_message(own_mac: [u8; 6], xid: u32) -> Result<ethernet::Packet, ()> {
     udp::PacketBuilder::new()
-        .source_port(own_mac.clone(), [0, 0, 0, 0], 68)
-        .destination_port(
-            [0xff, 0xff, 0xff, 0xff, 0xff, 0xff],
-            [255, 255, 255, 255],
-            67,
-        )
+        .source_port(68)
+        .destination_port(67)
         .finish(
+            ipv4::PacketBuilder::new()
+                .dscp(0)
+                .identification(0x1234)
+                .ttl(20)
+                .protocol(ipv4::Protocol::Udp)
+                .source([0, 0, 0, 0], own_mac.clone())
+                .destination([255, 255, 255, 255], [0xff, 0xff, 0xff, 0xff, 0xff, 0xff]),
             |payload| {
                 payload[0] = 0x1;
                 payload[1] = 0x1;
@@ -140,13 +141,16 @@ pub fn request_message(
     server_ip: [u8; 4],
 ) -> Result<ethernet::Packet, ()> {
     udp::PacketBuilder::new()
-        .source_port(own_mac.clone(), [0, 0, 0, 0], 68)
-        .destination_port(
-            [0xff, 0xff, 0xff, 0xff, 0xff, 0xff],
-            [255, 255, 255, 255],
-            67,
-        )
+        .source_port(68)
+        .destination_port(67)
         .finish(
+            ipv4::PacketBuilder::new()
+                .dscp(0)
+                .identification(0x1234)
+                .ttl(20)
+                .protocol(ipv4::Protocol::Udp)
+                .source([0, 0, 0, 0], own_mac.clone())
+                .destination([255, 255, 255, 255], [0xff, 0xff, 0xff, 0xff, 0xff, 0xff]),
             |payload| {
                 payload[0] = 0x1;
                 payload[1] = 0x1;

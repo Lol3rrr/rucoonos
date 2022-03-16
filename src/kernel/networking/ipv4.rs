@@ -40,14 +40,14 @@ pub struct PacketHeader {
     dscp: u8,
     ecn: u8,
     total_length: u16,
-    identification: u16,
+    pub identification: u16,
     flags: u8,
     fragment_offset: u16,
     ttl: u8,
     pub protocol: Protocol,
     header_checksum: u16,
-    source_ip: [u8; 4],
-    destination_ip: [u8; 4],
+    pub source_ip: [u8; 4],
+    pub destination_ip: [u8; 4],
 }
 
 impl PacketHeader {
@@ -120,6 +120,10 @@ impl Packet {
             source_ip: header_data[12..16].try_into().unwrap(),
             destination_ip: header_data[16..20].try_into().unwrap(),
         }
+    }
+
+    pub fn eth(&self) -> &ethernet::Packet {
+        &self.eth_packet
     }
 
     pub fn payload(&self) -> &[u8] {

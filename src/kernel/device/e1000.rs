@@ -4,7 +4,7 @@ use x86_64::structures::paging::Translate;
 // https://br.mouser.com/datasheet/2/612/i217_ethernet_controller_datasheet-257741.pdf
 
 use crate::{
-    kernel::{allocator, pci, MEMORY_MAPPING},
+    kernel::{allocator, networking, pci, MEMORY_MAPPING},
     println,
 };
 
@@ -15,7 +15,9 @@ pub struct E1000Card {
     tx_ptr: x86_64::VirtAddr,
     cur_tx: u32,
     cur_rx: u32,
-    rx_buffers: [*const u8; 32],
+    last_reclaimed_tx: u32,
+    rx_buffers: [*const u8; RX_DESC],
+    tx_buffers: [*const u8; TX_DESC],
     packet_queue: PacketQueueReceiver,
 }
 
@@ -252,7 +254,9 @@ impl E1000Card {
                 tx_ptr: tx_desc_ptr,
                 cur_tx: 0,
                 cur_rx: 0,
+                last_reclaimed_tx: 0,
                 rx_buffers,
+                tx_buffers: [0 as *const u8; TX_DESC],
                 packet_queue,
             },
             move || {
@@ -350,6 +354,8 @@ impl E1000Card {
         base_ptr.cmd = CMD_EOP | CMD_IFCS | CMD_RS;
         base_ptr.status = 0;
 
+        self.tx_buffers[self.cur_tx as usize] = data_ptr as *const u8;
+
         let next_tail = (self.cur_tx + 1) % 8;
 
         self.com.write_command(REG_TXDESCTAIL, next_tail);
@@ -393,14 +399,13 @@ impl NetworkingDevice for E1000Card {
             }
         }
 
-        let cur_head = self.com.read_command(REG_TXDESCHEAD);
-        let cur_tail = self.com.read_command(REG_TXDESCTAIL);
+        let cur_tx_head = self.com.read_command(REG_TXDESCHEAD);
+        let cur_tx_tail = self.com.read_command(REG_TXDESCTAIL);
 
-        if cur_head == cur_tail && (cause.txd_low || cause.txdw) {
+        if cur_tx_head == cur_tx_tail && (cause.txd_low || cause.txdw) {
             for _ in 0..TX_DESC {
                 match unsafe { self.packet_queue.dequeue() } {
                     Some(packet) => {
-                        println!("Send Ethernet Packet");
                         let buffer = packet.into_buffer();
                         let (data_ptr, len) = buffer.into_raw();
                         unsafe {
@@ -411,6 +416,33 @@ impl NetworkingDevice for E1000Card {
                         break;
                     }
                 };
+            }
+        }
+
+        if cause.txdw {
+            for tx_index in (0..8u32)
+                .cycle()
+                .skip(self.last_reclaimed_tx as usize)
+                .take_while(|i| *i != cur_tx_head)
+            {
+                let raw_address = self.tx_ptr.as_u64();
+                let base_ptr = unsafe {
+                    &mut *(((raw_address as usize) as *const TxDesc as *mut TxDesc)
+                        .add(tx_index as usize))
+                };
+
+                if base_ptr.status != 1 {
+                    continue;
+                }
+
+                let tx_data_ptr = self.tx_buffers[tx_index as usize];
+                let buffer = unsafe {
+                    networking::Buffer::from_raw(tx_data_ptr as *mut u8 as *mut [u8; 2048], 0)
+                };
+                drop(buffer);
+
+                self.tx_buffers[tx_index as usize] = 0 as *const u8;
+                self.last_reclaimed_tx = (tx_index + 1) % TX_DESC as u32;
             }
         }
     }

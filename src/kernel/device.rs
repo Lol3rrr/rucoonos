@@ -168,7 +168,51 @@ impl<'m> NetworkingCtx<'m> {
 
                 match ip_packet.header().protocol {
                     networking::ipv4::Protocol::Icmp => {
-                        println!("ICMP-Packet");
+                        let icmp_packet = networking::icmp::Packet::new(ip_packet);
+
+                        match icmp_packet.get_type() {
+                            networking::icmp::Type::EchoRequest {
+                                sequence,
+                                identifier,
+                            } => {
+                                let ip_packet = icmp_packet.ipv4_packet();
+                                let ip_header = ip_packet.header();
+
+                                let resp_ip_builder = networking::ipv4::PacketBuilder::new()
+                                    .dscp(0)
+                                    .identification(0x3456)
+                                    .ttl(10)
+                                    .protocol(networking::ipv4::Protocol::Icmp)
+                                    .source(ip_header.destination_ip, self.meta.mac.clone())
+                                    .destination(ip_header.source_ip, ip_packet.eth().source_mac());
+
+                                let req_payload = icmp_packet.payload();
+
+                                self.queue.enqueue(
+                                    networking::icmp::PacketBuilder::new()
+                                        .set_type(networking::icmp::Type::EchoReply {
+                                            sequence,
+                                            identifier,
+                                        })
+                                        .finish(
+                                            resp_ip_builder,
+                                            |buffer| {
+                                                (&mut buffer[0..(req_payload.len())])
+                                                    .copy_from_slice(req_payload);
+                                                Ok(req_payload.len())
+                                            },
+                                            || req_payload.len(),
+                                        )
+                                        .unwrap(),
+                                );
+                            }
+                            networking::icmp::Type::EchoReply { .. } => {
+                                println!("Echo Reply");
+                            }
+                            networking::icmp::Type::Unknown(d) => {
+                                println!("Unknown ICMP: {:?}", d);
+                            }
+                        };
                     }
                     networking::ipv4::Protocol::Udp => {
                         let udp_packet = networking::udp::Packet::new(ip_packet);
