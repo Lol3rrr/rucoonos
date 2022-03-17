@@ -24,6 +24,17 @@ pub struct NetworkDevice {
     pub metadata: NetworkingMetadata,
 }
 
+pub enum DeviceHandle {
+    Network(NetworkingDeviceHandle),
+    Graphics(),
+}
+
+pub struct NetworkingDeviceHandle {
+    pub mac: [u8; 6],
+    pub ip: Option<[u8; 4]>,
+    pub p_queue: PacketQueueSender,
+}
+
 pub struct NetworkingMetadata {
     pub mac: [u8; 6],
     pub ip: Option<[u8; 4]>,
@@ -56,6 +67,7 @@ pub trait NetworkingDevice {
 pub struct NetworkingCtx<'m> {
     pub meta: &'m mut NetworkingMetadata,
     pub queue: &'m PacketQueueSender,
+    pub ips: &'m networking::IpMap,
 }
 
 pub struct E1000Driver {}
@@ -153,7 +165,7 @@ impl<'m> NetworkingCtx<'m> {
                         );
                     }
                     arp::Operation::Response => {
-                        println!("Arp-Response");
+                        self.ips.set(arp_packet.src_ip, arp_packet.src_mac);
                     }
                     arp::Operation::Unknown(unknown) => {
                         println!("Unknown ARP-Operation: {:?}", unknown);
@@ -296,9 +308,10 @@ impl<'m> NetworkingCtx<'m> {
     }
 }
 
+#[derive(Clone)]
 pub struct PacketQueueSender {
     queue: Arc<spin::Mutex<VecDeque<networking::ethernet::Packet>>>,
-    notify: Box<dyn Fn() + 'static + Send>,
+    notify: Arc<dyn Fn() + 'static + Send + Sync>,
 }
 pub struct PacketQueueReceiver {
     queue: Arc<spin::Mutex<VecDeque<networking::ethernet::Packet>>>,
@@ -306,7 +319,7 @@ pub struct PacketQueueReceiver {
 
 fn create_packetqueue<F>() -> (impl FnOnce(F) -> PacketQueueSender, PacketQueueReceiver)
 where
-    F: Fn() + 'static + Send,
+    F: Fn() + 'static + Send + Sync,
 {
     let queue = Arc::new(spin::Mutex::new(VecDeque::new()));
 
@@ -314,7 +327,7 @@ where
     (
         move |sender| PacketQueueSender {
             queue,
-            notify: Box::new(sender),
+            notify: Arc::new(sender),
         },
         PacketQueueReceiver { queue: recv_queue },
     )

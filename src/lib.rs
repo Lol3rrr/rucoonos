@@ -33,7 +33,7 @@ pub mod video;
 
 pub mod futures;
 
-pub(crate) const TASKS: usize = 2;
+pub(crate) const TASKS: usize = 10;
 pub(crate) static RUNTIME: rucoon::runtime::Runtime<TASKS> = rucoon::runtime::Runtime::new();
 
 #[alloc_error_handler]

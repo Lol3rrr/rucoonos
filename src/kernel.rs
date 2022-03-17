@@ -19,11 +19,12 @@ mod pci;
 
 static MEMORY_MAPPING: spin::Once<OffsetPageTable> = spin::Once::new();
 
-static KERNEL_INSTANCE: spin::Once<Kernel> = spin::Once::new();
+pub static KERNEL_INSTANCE: spin::Once<Kernel> = spin::Once::new();
 
 pub struct Kernel {
     rsdt: Option<(RSDT<OffsetMapper>, OffsetMapper)>,
     devices: spin::Mutex<Vec<device::Device>>,
+    pub ips: networking::IpMap,
 }
 
 impl Kernel {
@@ -158,6 +159,7 @@ impl Kernel {
         let instance = Self {
             rsdt,
             devices: spin::Mutex::new(devices),
+            ips: networking::IpMap::new(),
         };
         KERNEL_INSTANCE.call_once(|| instance)
     }
@@ -201,7 +203,11 @@ impl Kernel {
                 continue;
             }
 
-            let mut ctx = device::NetworkingCtx { meta, queue };
+            let mut ctx = device::NetworkingCtx {
+                meta,
+                queue,
+                ips: &self.ips,
+            };
             n_device.handle_interrupt(&mut ctx);
         }
     }
@@ -221,5 +227,28 @@ impl Kernel {
                 func(dev);
             }
         });
+    }
+
+    pub fn find_device_handle<F>(&self, predicate: F) -> Option<device::DeviceHandle>
+    where
+        F: Fn(&device::Device) -> bool,
+    {
+        x86_64::instructions::interrupts::without_interrupts(|| {
+            let devices = self.devices.lock();
+
+            let raw_device = devices.iter().find(|d| predicate(d))?;
+
+            let handle = match raw_device {
+                device::Device::Network(net_dev) => {
+                    device::DeviceHandle::Network(device::NetworkingDeviceHandle {
+                        mac: net_dev.metadata.mac,
+                        ip: net_dev.metadata.ip,
+                        p_queue: net_dev.packet_queue.clone(),
+                    })
+                }
+                device::Device::Graphics() => device::DeviceHandle::Graphics(),
+            };
+            Some(handle)
+        })
     }
 }

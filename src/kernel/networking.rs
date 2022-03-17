@@ -1,53 +1,7 @@
-use core::fmt::Debug;
+use alloc::{collections::BTreeMap, sync::Arc};
 
-use alloc::boxed::Box;
-
-pub struct Buffer {
-    data: Box<[u8; 2048]>,
-    len: usize,
-}
-
-impl Buffer {
-    pub fn new(data: &[u8]) -> Self {
-        let mut target_data = Box::new([0u8; 2048]);
-
-        for (target, src) in target_data.iter_mut().zip(data.iter()) {
-            *target = *src;
-        }
-
-        Self {
-            data: target_data,
-            len: data.len(),
-        }
-    }
-
-    pub fn len(&self) -> usize {
-        self.len
-    }
-
-    pub fn into_raw(self) -> (*mut [u8], usize) {
-        (Box::into_raw(self.data), self.len)
-    }
-
-    pub unsafe fn from_raw(ptr: *mut [u8], len: usize) -> Self {
-        let buffer = unsafe { Box::from_raw(ptr as *mut [u8; 2048]) };
-        Self { data: buffer, len }
-    }
-}
-
-impl Debug for Buffer {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.debug_list()
-            .entries(self.data.iter().take(self.len))
-            .finish()
-    }
-}
-
-impl AsRef<[u8]> for Buffer {
-    fn as_ref(&self) -> &[u8] {
-        self.data.as_ref()
-    }
-}
+mod buffer;
+pub use buffer::Buffer;
 
 pub mod arp;
 pub mod dhcp;
@@ -55,3 +9,25 @@ pub mod ethernet;
 pub mod icmp;
 pub mod ipv4;
 pub mod udp;
+
+#[derive(Clone)]
+pub struct IpMap {
+    map: Arc<spin::Mutex<BTreeMap<[u8; 4], [u8; 6]>>>,
+}
+
+impl IpMap {
+    pub fn new() -> Self {
+        Self {
+            map: Arc::new(spin::Mutex::new(BTreeMap::new())),
+        }
+    }
+
+    pub fn try_get(&self, ip: &[u8; 4]) -> Option<[u8; 6]> {
+        x86_64::instructions::interrupts::without_interrupts(|| self.map.lock().get(ip).cloned())
+    }
+    pub fn set(&self, ip: [u8; 4], mac: [u8; 6]) {
+        x86_64::instructions::interrupts::without_interrupts(|| {
+            self.map.lock().insert(ip, mac);
+        });
+    }
+}
