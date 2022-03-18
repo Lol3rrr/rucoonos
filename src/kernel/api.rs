@@ -34,5 +34,15 @@ pub mod networking {
         pub fn try_recv(&self) -> Option<networking::udp::Packet> {
             self.receiver.try_dequeue().ok()
         }
+
+        pub async fn a_recv(&self) -> Option<networking::udp::Packet> {
+            loop {
+                if let Some(p) = self.try_recv() {
+                    return Some(p);
+                }
+
+                crate::futures::sleep_ms(1).await;
+            }
+        }
     }
 }

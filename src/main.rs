@@ -66,7 +66,7 @@ fn kernel_main(boot_info: &'static mut bootloader::BootInfo) -> ! {
         }
     }
 
-    let udp_listener = kernel
+    let udp_listen = kernel
         .find_apply_device(
             |dev| match dev {
                 kernel::device::Device::Network(n_dev) => true,
@@ -84,18 +84,6 @@ fn kernel_main(boot_info: &'static mut bootloader::BootInfo) -> ! {
             },
         )
         .unwrap();
-
-    loop {
-        let packet = match udp_listener.try_recv() {
-            Some(p) => p,
-            None => {
-                x86_64::instructions::hlt();
-                continue;
-            }
-        };
-
-        println!("Received-UDP-Packet: {:?}", packet.header());
-    }
 
     kernel.with_networking_device(|device| {
         let sender = &device.packet_queue;
@@ -130,6 +118,7 @@ fn kernel_main(boot_info: &'static mut bootloader::BootInfo) -> ! {
     {
         kernel.add_task(tetris()).unwrap();
         kernel.add_task(ping([192, 168, 178, 1])).unwrap();
+        kernel.add_task(udp_listener(udp_listen)).unwrap();
 
         if let Err(_) = kernel.start_runtime() {
             println!("Error running Runtime");
@@ -176,6 +165,20 @@ async fn ping(target_ip: [u8; 4]) {
             )
             .unwrap(),
     )
+}
+
+async fn udp_listener(udp_listener: kernel::api::networking::UDPListener) {
+    loop {
+        let packet = match udp_listener.a_recv().await {
+            Some(p) => p,
+            None => {
+                x86_64::instructions::hlt();
+                continue;
+            }
+        };
+
+        println!("Received-UDP-Packet: {:?}", packet.header());
+    }
 }
 
 async fn tetris() {
