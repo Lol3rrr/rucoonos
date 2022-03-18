@@ -1,6 +1,10 @@
 use core::sync::atomic::{AtomicBool, Ordering};
 
-use alloc::{boxed::Box, collections::VecDeque, sync::Arc};
+use alloc::{
+    boxed::Box,
+    collections::{BTreeMap, VecDeque},
+    sync::Arc,
+};
 
 use crate::{kernel::networking::arp, println};
 
@@ -22,6 +26,9 @@ pub struct NetworkDevice {
     /// The Queue to enqueue Packets on to send out over the Queue
     pub packet_queue: PacketQueueSender,
     pub metadata: NetworkingMetadata,
+    pub udp_bindings: spin::Mutex<
+        BTreeMap<u16, nolock::queues::mpmc::bounded::scq::Sender<networking::udp::Packet>>,
+    >,
 }
 
 pub enum DeviceHandle {
@@ -68,6 +75,8 @@ pub struct NetworkingCtx<'m> {
     pub meta: &'m mut NetworkingMetadata,
     pub queue: &'m PacketQueueSender,
     pub ips: &'m networking::IpMap,
+    pub udp_bindings:
+        &'m BTreeMap<u16, nolock::queues::mpmc::bounded::scq::Sender<networking::udp::Packet>>,
 }
 
 pub struct E1000Driver {}
@@ -286,8 +295,15 @@ impl<'m> NetworkingCtx<'m> {
                                 }
                             };
                         } else {
-                            println!("UDP-Header: {:?}", udp_header);
-                            println!("UDP-Packet: {:?}", udp_packet.payload());
+                            match self.udp_bindings.get(&udp_header.destination_port) {
+                                Some(bind_queue) => {
+                                    let _ = bind_queue.try_enqueue(udp_packet);
+                                }
+                                None => {
+                                    println!("UDP-Header: {:?}", udp_header);
+                                    println!("UDP-Packet: {:?}", udp_packet.payload());
+                                }
+                            };
                         }
                     }
                     networking::ipv4::Protocol::Tcp => {
@@ -310,43 +326,37 @@ impl<'m> NetworkingCtx<'m> {
 
 #[derive(Clone)]
 pub struct PacketQueueSender {
-    queue: Arc<spin::Mutex<VecDeque<networking::ethernet::Packet>>>,
+    queue: Arc<nolock::queues::mpsc::jiffy::Sender<networking::ethernet::Packet>>,
     notify: Arc<dyn Fn() + 'static + Send + Sync>,
 }
 pub struct PacketQueueReceiver {
-    queue: Arc<spin::Mutex<VecDeque<networking::ethernet::Packet>>>,
+    queue: nolock::queues::mpsc::jiffy::Receiver<networking::ethernet::Packet>,
 }
 
 fn create_packetqueue<F>() -> (impl FnOnce(F) -> PacketQueueSender, PacketQueueReceiver)
 where
     F: Fn() + 'static + Send + Sync,
 {
-    let queue = Arc::new(spin::Mutex::new(VecDeque::new()));
+    let (recv, send) = nolock::queues::mpsc::jiffy::queue();
 
-    let recv_queue = queue.clone();
     (
         move |sender| PacketQueueSender {
-            queue,
+            queue: Arc::new(send),
             notify: Arc::new(sender),
         },
-        PacketQueueReceiver { queue: recv_queue },
+        PacketQueueReceiver { queue: recv },
     )
 }
 
 impl PacketQueueSender {
     pub fn enqueue(&self, packet: networking::ethernet::Packet) {
-        x86_64::instructions::interrupts::without_interrupts(|| {
-            let mut locked = self.queue.lock();
-            locked.push_back(packet);
-            if locked.len() == 1 {
-                (self.notify)();
-            }
-        });
+        let _ = self.queue.enqueue(packet);
+        (self.notify)();
     }
 }
 
 impl PacketQueueReceiver {
     pub unsafe fn dequeue(&mut self) -> Option<networking::ethernet::Packet> {
-        self.queue.lock().pop_front()
+        self.queue.try_dequeue().ok()
     }
 }

@@ -66,6 +66,37 @@ fn kernel_main(boot_info: &'static mut bootloader::BootInfo) -> ! {
         }
     }
 
+    let udp_listener = kernel
+        .find_apply_device(
+            |dev| match dev {
+                kernel::device::Device::Network(n_dev) => true,
+                _ => false,
+            },
+            |dev| {
+                let n_dev = match dev {
+                    kernel::device::Device::Network(n) => n,
+                    _ => unreachable!(),
+                };
+
+                println!("Device-IP: {:?}", n_dev.metadata.ip);
+
+                kernel::api::networking::UDPListener::bind(8080, n_dev).unwrap()
+            },
+        )
+        .unwrap();
+
+    loop {
+        let packet = match udp_listener.try_recv() {
+            Some(p) => p,
+            None => {
+                x86_64::instructions::hlt();
+                continue;
+            }
+        };
+
+        println!("Received-UDP-Packet: {:?}", packet.header());
+    }
+
     kernel.with_networking_device(|device| {
         let sender = &device.packet_queue;
         let meta = &device.metadata;

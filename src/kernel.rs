@@ -7,12 +7,13 @@ use crate::{
     println, RUNTIME,
 };
 
-use alloc::{boxed::Box, vec::Vec};
+use alloc::{boxed::Box, collections::BTreeMap, vec::Vec};
 use bootloader::boot_info::Optional;
 use rucoon::runtime::{AddTaskError, RunError, TaskID};
 use x86_64::{structures::paging::OffsetPageTable, VirtAddr};
 
 mod allocator;
+pub mod api;
 pub mod device;
 pub mod networking;
 mod pci;
@@ -122,6 +123,7 @@ impl Kernel {
                                 device: Box::new(n_device),
                                 metadata: meta,
                                 packet_queue: n_queue,
+                                udp_bindings: spin::Mutex::new(BTreeMap::new()),
                             }))
                         }
                         Err(_) => None,
@@ -189,15 +191,17 @@ impl Kernel {
 
         let mut devices = self.devices.lock();
         for device in devices.iter_mut() {
-            let (n_device, meta, queue) = match device {
+            let (n_device, meta, queue, raw_udp_bindings) = match device {
                 device::Device::Network(device::NetworkDevice {
                     device,
                     metadata,
                     packet_queue,
+                    udp_bindings,
                     ..
-                }) => (device, metadata, packet_queue),
+                }) => (device, metadata, packet_queue, udp_bindings),
                 _ => continue,
             };
+            let udp_bindings = raw_udp_bindings.lock();
 
             if !n_device.handles_interrupt(0xb) {
                 continue;
@@ -207,6 +211,7 @@ impl Kernel {
                 meta,
                 queue,
                 ips: &self.ips,
+                udp_bindings: &udp_bindings,
             };
             n_device.handle_interrupt(&mut ctx);
         }
@@ -249,6 +254,20 @@ impl Kernel {
                 device::Device::Graphics() => device::DeviceHandle::Graphics(),
             };
             Some(handle)
+        })
+    }
+
+    pub fn find_apply_device<F, A, R>(&self, find: F, mut apply: A) -> Option<R>
+    where
+        F: Fn(&device::Device) -> bool,
+        A: FnMut(&device::Device) -> R,
+    {
+        x86_64::instructions::interrupts::without_interrupts(|| {
+            let devices = self.devices.lock();
+
+            let found_device = devices.iter().find(|d| find(d))?;
+
+            Some(apply(found_device))
         })
     }
 }

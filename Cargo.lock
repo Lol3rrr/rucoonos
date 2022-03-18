@@ -80,6 +80,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "nolock"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1a360dadbeed91a0cbd15722c72d3804c86926805b8cdb5ef1b512ede87f3de6"
+
+[[package]]
 name = "pic8259"
 version = "0.10.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -99,6 +105,7 @@ dependencies = [
  "bootloader",
  "lazy_static",
  "linked_list_allocator",
+ "nolock",
  "pic8259",
  "rucoon",
  "spin 0.9.2",
