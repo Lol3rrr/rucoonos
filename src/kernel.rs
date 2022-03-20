@@ -22,9 +22,13 @@ static MEMORY_MAPPING: spin::Once<OffsetPageTable> = spin::Once::new();
 
 pub static KERNEL_INSTANCE: spin::Once<Kernel> = spin::Once::new();
 
+/// This struct contains all the essential Data needed for the running kernel instance
 pub struct Kernel {
+    /// The parsed out RSDT
     rsdt: Option<(RSDT<OffsetMapper>, OffsetMapper)>,
+    /// A list of all loaded Devices
     devices: spin::Mutex<Vec<device::Device>>,
+    /// A Map from all known IPs to their respective MAC-Addresses
     pub ips: networking::IpMap,
 }
 

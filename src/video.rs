@@ -1,6 +1,8 @@
 use bootloader::boot_info::{FrameBuffer, FrameBufferInfo};
 
+/// Holds the information about the Framebuffer
 static INFO: spin::Once<FrameBufferInfo> = spin::Once::new();
+/// The actual raw underlying Framebuffer
 static BUFFER: spin::Once<spin::Mutex<&'static mut [u8]>> = spin::Once::new();
 
 pub fn init(buffer: &'static mut FrameBuffer) {
@@ -8,26 +10,7 @@ pub fn init(buffer: &'static mut FrameBuffer) {
     BUFFER.call_once(|| spin::Mutex::new(buffer.buffer_mut()));
 }
 
-pub fn display() {
-    let raw_buffer = match BUFFER.poll() {
-        Some(b) => b,
-        None => return,
-    };
-    x86_64::instructions::interrupts::without_interrupts(|| {
-        let mut locked = raw_buffer.lock();
-
-        let mut color = 0x50;
-        for byte in locked.iter_mut() {
-            *byte = color;
-
-            color += 1;
-            if color > 0xf0 {
-                color = 0x50;
-            }
-        }
-    });
-}
-
+/// Draws the given Color on screen at the given coordinates
 pub fn draw(x: usize, y: usize, color: Color) {
     let raw_buffer = match BUFFER.poll() {
         Some(b) => b,
@@ -50,8 +33,12 @@ pub fn draw(x: usize, y: usize, color: Color) {
     });
 }
 
+/// Holds color information for a single Pixel
 pub struct Color {
+    /// The Red Color channel
     pub red: u8,
+    /// The Green Color channel
     pub green: u8,
+    /// The Blue Color channel
     pub blue: u8,
 }

@@ -46,15 +46,13 @@ pub fn init_idt() {
         PICS.lock().write_masks(0x00, 0x00);
     }
 
-    /*
-    unsafe {
-        PICS.lock().disable();
-    }
-    */
-
     unsafe {
         timer::configure_pit();
     }
+}
+
+pub unsafe fn set_interrupt(line: usize) {
+    // TODO
 }
 
 extern "x86-interrupt" fn breakpoint_handler(stack_frame: InterruptStackFrame) {
