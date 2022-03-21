@@ -1,12 +1,7 @@
+use alloc::{boxed::Box, collections::BTreeMap, sync::Arc};
 use core::sync::atomic::{AtomicBool, Ordering};
 
-use alloc::{
-    boxed::Box,
-    collections::{BTreeMap, VecDeque},
-    sync::Arc,
-};
-
-use crate::{kernel::networking::arp, println};
+use crate::{interrupts, kernel::networking::arp, println};
 
 use super::{
     networking::{self, ethernet::EthType},
@@ -87,6 +82,9 @@ impl E1000Driver {
         offset: u64,
     ) -> Result<(impl NetworkingDevice, NetworkingMetadata, PacketQueueSender), ()> {
         device.enable_bus_mastering();
+
+        // Enable the Interrupt for the Networking Device
+        let _ = interrupts::try_set_irq(interrupts::networking::network_interrupt, 0xb);
 
         let (mut card, sender) = match device.header_type {
             pci::HeaderType::Generic { base_addresses, .. } => {

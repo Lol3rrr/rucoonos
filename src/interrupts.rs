@@ -6,7 +6,7 @@ use x86_64::structures::idt::{InterruptDescriptorTable, InterruptStackFrame, Pag
 use crate::{gdt, hlt_loop, println};
 
 mod keyboard;
-mod networking;
+pub mod networking;
 mod timer;
 pub(crate) use timer::TIMER;
 
@@ -17,7 +17,15 @@ pub static PICS: spin::Mutex<ChainedPics> =
     spin::Mutex::new(unsafe { ChainedPics::new(PIC_1_OFFSET, PIC_2_OFFSET) });
 
 lazy_static! {
-    static ref IDT: InterruptDescriptorTable = {
+    static ref INTERRUPTS: InterruptManager = InterruptManager::new();
+}
+
+struct InterruptManager {
+    idt: spin::Mutex<InterruptDescriptorTable>,
+}
+
+impl InterruptManager {
+    pub fn new() -> Self {
         let mut idt = InterruptDescriptorTable::new();
 
         idt.breakpoint.set_handler_fn(breakpoint_handler);
@@ -30,29 +38,78 @@ lazy_static! {
         idt.general_protection_fault
             .set_handler_fn(general_protection_handler);
         idt[InterruptIndex::Timer.as_usize()].set_handler_fn(timer::timer_interrupt_handler);
-        idt[InterruptIndex::Keyboard.as_usize()]
-            .set_handler_fn(keyboard::keyboard_interrupt_handler);
-        idt[PIC_1_OFFSET as usize + 0xb].set_handler_fn(networking::network_interrupt);
+        //idt[InterruptIndex::Keyboard.as_usize()]
+        //  .set_handler_fn(keyboard::keyboard_interrupt_handler);
+        // idt[PIC_1_OFFSET as usize + 0xb].set_handler_fn(networking::network_interrupt);
 
-        idt
-    };
+        Self {
+            idt: spin::Mutex::new(idt),
+        }
+    }
+
+    pub fn load(&'static self) {
+        x86_64::instructions::interrupts::without_interrupts(|| {
+            let locked = self.idt.lock();
+            // This is safe because we require that self has a static lifetime and we never
+            // deallocate the idt in self
+            unsafe {
+                locked.load_unsafe();
+            }
+        });
+    }
+
+    pub fn try_set_irq_handler(
+        &'static self,
+        handler: extern "x86-interrupt" fn(InterruptStackFrame),
+        line: u8,
+    ) -> Result<(), ()> {
+        let idt_number = (line + PIC_1_OFFSET) as usize;
+        x86_64::instructions::interrupts::without_interrupts(|| {
+            let mut locked = self.idt.lock();
+            let entry = &mut locked[idt_number];
+
+            if (*entry).ne(&x86_64::structures::idt::Entry::<
+                extern "x86-interrupt" fn(InterruptStackFrame),
+            >::missing())
+            {
+                return Err(());
+            }
+
+            entry.set_handler_fn(handler);
+
+            let mut locked_pics = PICS.lock();
+            let mut masks = unsafe { locked_pics.read_masks() };
+
+            if line < 8 {
+                masks[0] &= 0xff & !(1 << line);
+            } else if line < 16 {
+                masks[1] &= 0xff & !(1 << (line - 8));
+            } else {
+                // The line was not in the correct region
+                return Err(());
+            }
+            unsafe {
+                locked_pics.write_masks(masks[0], masks[1]);
+            }
+
+            Ok(())
+        })
+    }
 }
 
 pub fn init_idt() {
-    IDT.load();
-
-    // Simply allow ALL the Interrupts
-    unsafe {
-        PICS.lock().write_masks(0x00, 0x00);
-    }
+    INTERRUPTS.load();
 
     unsafe {
         timer::configure_pit();
     }
 }
 
-pub unsafe fn set_interrupt(line: usize) {
-    // TODO
+pub fn try_set_irq(
+    handler: extern "x86-interrupt" fn(InterruptStackFrame),
+    line: u8,
+) -> Result<(), ()> {
+    INTERRUPTS.try_set_irq_handler(handler, line)
 }
 
 extern "x86-interrupt" fn breakpoint_handler(stack_frame: InterruptStackFrame) {
