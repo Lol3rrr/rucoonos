@@ -17,6 +17,7 @@ pub mod api;
 pub mod device;
 pub mod networking;
 mod pci;
+mod rng;
 
 static MEMORY_MAPPING: spin::Once<OffsetPageTable> = spin::Once::new();
 
@@ -30,6 +31,7 @@ pub struct Kernel {
     devices: spin::Mutex<Vec<device::Device>>,
     /// A Map from all known IPs to their respective MAC-Addresses
     pub ips: networking::IpMap,
+    rng: spin::Mutex<rng::Kiss>,
 }
 
 impl Kernel {
@@ -166,6 +168,9 @@ impl Kernel {
             rsdt,
             devices: spin::Mutex::new(devices),
             ips: networking::IpMap::new(),
+            rng: spin::Mutex::new(
+                rng::Kiss::new(239812446, 1837621879, 512893, 123873267123).unwrap(),
+            ),
         };
         KERNEL_INSTANCE.call_once(|| instance)
     }
@@ -273,5 +278,9 @@ impl Kernel {
 
             Some(apply(found_device))
         })
+    }
+
+    pub fn get_rand(&self) -> u64 {
+        x86_64::instructions::interrupts::without_interrupts(|| self.rng.lock().rand())
     }
 }

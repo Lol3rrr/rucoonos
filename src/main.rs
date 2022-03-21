@@ -117,7 +117,7 @@ fn kernel_main(boot_info: &'static mut bootloader::BootInfo) -> ! {
     #[cfg(not(test))]
     {
         kernel.add_task(tetris()).unwrap();
-        kernel.add_task(ping([192, 168, 178, 1])).unwrap();
+        kernel.add_task(ping_cloudflare_dns()).unwrap();
         kernel.add_task(udp_listener(udp_listen)).unwrap();
 
         if let Err(_) = kernel.start_runtime() {
@@ -131,7 +131,7 @@ fn kernel_main(boot_info: &'static mut bootloader::BootInfo) -> ! {
     panic!("Done")
 }
 
-async fn ping(target_ip: [u8; 4]) {
+async fn ping_cloudflare_dns() {
     let kernel = kernel::KERNEL_INSTANCE.get().unwrap();
     let raw_net_dev = kernel
         .find_device_handle(|dev| match dev {
@@ -144,27 +144,7 @@ async fn ping(target_ip: [u8; 4]) {
         _ => unreachable!(),
     };
 
-    let mac = crate::futures::get_mac(kernel, target_ip, &net_dev).await;
-
-    net_dev.p_queue.enqueue(
-        networking::icmp::PacketBuilder::new()
-            .set_type(networking::icmp::Type::EchoRequest {
-                identifier: 123,
-                sequence: 224,
-            })
-            .finish(
-                networking::ipv4::PacketBuilder::new()
-                    .dscp(0)
-                    .identification(123)
-                    .ttl(20)
-                    .protocol(networking::ipv4::Protocol::Icmp)
-                    .source(net_dev.ip.unwrap(), net_dev.mac)
-                    .destination(target_ip, mac),
-                |_| Ok(0),
-                || 0,
-            )
-            .unwrap(),
-    )
+    kernel::api::networking::ping([1, 1, 1, 1], &net_dev).await;
 }
 
 async fn udp_listener(udp_listener: kernel::api::networking::UDPListener) {

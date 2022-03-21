@@ -5,7 +5,7 @@ use crate::{interrupts, kernel::networking::arp, println};
 
 use super::{
     networking::{self, ethernet::EthType},
-    pci,
+    pci, KERNEL_INSTANCE,
 };
 
 mod e1000;
@@ -122,17 +122,24 @@ impl NetworkDevice {
         if self.metadata.ip.is_some() {
             return Err(());
         }
+        let kernel = KERNEL_INSTANCE.get().ok_or(())?;
 
         let indicator = Arc::new(AtomicBool::new(false));
 
-        let tx_id = 0x12345678;
+        let tx_id = kernel.get_rand() as u32;
         self.metadata.dhcp = DHCPExchange::Discover {
             indicator: indicator.clone(),
             transaction_id: tx_id,
         };
 
-        self.packet_queue
-            .enqueue(networking::dhcp::discover_message(self.metadata.mac.clone(), tx_id).unwrap());
+        self.packet_queue.enqueue(
+            networking::dhcp::discover_message(
+                self.metadata.mac.clone(),
+                tx_id,
+                kernel.get_rand() as u16,
+            )
+            .unwrap(),
+        );
 
         Ok(move || loop {
             if indicator.load(Ordering::SeqCst) {
@@ -269,6 +276,11 @@ impl<'m> NetworkingCtx<'m> {
                                             transaction_id,
                                             offered_ip.clone(),
                                             server_ip.clone(),
+                                            dhcp_packet
+                                                .udp_datagram()
+                                                .ip_packet()
+                                                .header()
+                                                .identification,
                                         )
                                         .unwrap(),
                                     );

@@ -56,6 +56,10 @@ impl Packet {
     pub fn payload(&self) -> &[u8] {
         &(self.ip_packet.payload())[8..]
     }
+
+    pub fn ip_packet(&self) -> &ipv4::Packet {
+        &self.ip_packet
+    }
 }
 
 pub struct InitialState {}
