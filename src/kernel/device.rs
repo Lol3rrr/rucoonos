@@ -83,8 +83,16 @@ impl E1000Driver {
     ) -> Result<(impl NetworkingDevice, NetworkingMetadata, PacketQueueSender), ()> {
         device.enable_bus_mastering();
 
-        // Enable the Interrupt for the Networking Device
-        let _ = interrupts::try_set_irq(interrupts::networking::network_interrupt, 0xb);
+        match device.header_type {
+            pci::HeaderType::Generic { interrupt_line, .. } => {
+                // Enable the correct interrupt
+                let _ = interrupts::try_set_irq(
+                    interrupts::networking::network_interrupt,
+                    interrupt_line,
+                );
+            }
+            _ => {}
+        };
 
         let (mut card, sender) = match device.header_type {
             pci::HeaderType::Generic { base_addresses, .. } => {
