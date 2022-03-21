@@ -38,9 +38,8 @@ impl InterruptManager {
         idt.general_protection_fault
             .set_handler_fn(general_protection_handler);
         idt[InterruptIndex::Timer.as_usize()].set_handler_fn(timer::timer_interrupt_handler);
-        //idt[InterruptIndex::Keyboard.as_usize()]
-        //  .set_handler_fn(keyboard::keyboard_interrupt_handler);
-        // idt[PIC_1_OFFSET as usize + 0xb].set_handler_fn(networking::network_interrupt);
+        idt[InterruptIndex::Keyboard.as_usize()]
+            .set_handler_fn(keyboard::keyboard_interrupt_handler);
 
         Self {
             idt: spin::Mutex::new(idt),

@@ -1,5 +1,3 @@
-use crate::println;
-
 // https://wiki.osdev.org/PCI#Enumerating_PCI_Buses
 
 const PCI_COMMAND: u8 = 0x4;
@@ -115,10 +113,9 @@ impl From<u32> for BaseAddressRegister {
                     ty: raw_ty as u8,
                 }
             }
-            1 => {
-                println!("IO Address");
-                Self::IOSpace { address: 0 }
-            }
+            1 => Self::IOSpace {
+                address: raw & 0xfffffffc,
+            },
             _ => unreachable!(""),
         }
     }
