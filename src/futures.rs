@@ -1,4 +1,4 @@
-use crate::{kernel::networking, Kernel};
+use crate::{hardware::networking, Hardware};
 
 pub fn sleep_ms(duration: usize) -> impl core::future::Future<Output = ()> {
     rucoon::extensions::time::sleep(
@@ -8,9 +8,9 @@ pub fn sleep_ms(duration: usize) -> impl core::future::Future<Output = ()> {
 }
 
 pub async fn get_mac(
-    kernel: &Kernel,
+    kernel: &Hardware,
     ip: [u8; 4],
-    device: &crate::kernel::device::NetworkingDeviceHandle,
+    device: &crate::hardware::device::NetworkingDeviceHandle,
 ) -> [u8; 6] {
     let ips = &kernel.ips;
     if let Some(mac) = ips.try_get(&ip) {

@@ -6,7 +6,7 @@ use alloc::{
     sync::Arc,
 };
 
-use crate::{kernel::networking::arp, println};
+use crate::{hardware::networking::arp, println};
 
 use super::{
     networking::{self, ethernet::EthType},

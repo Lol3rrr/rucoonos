@@ -3,7 +3,7 @@ use x86_64::structures::paging::Translate;
 
 // https://br.mouser.com/datasheet/2/612/i217_ethernet_controller_datasheet-257741.pdf
 
-use crate::kernel::{allocator, networking, pci, MEMORY_MAPPING};
+use crate::hardware::{allocator, networking, pci, MEMORY_MAPPING};
 
 pub struct E1000Card {
     com: Coms,

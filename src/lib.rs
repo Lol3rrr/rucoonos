@@ -20,8 +20,8 @@ extern crate alloc;
 
 use core::panic::PanicInfo;
 
-pub mod kernel;
-pub use kernel::Kernel;
+pub mod hardware;
+pub use hardware::Hardware;
 
 pub mod acpi;
 pub mod gdt;
@@ -32,9 +32,6 @@ pub mod vga;
 pub mod video;
 
 pub mod futures;
-
-pub(crate) const TASKS: usize = 10;
-pub(crate) static RUNTIME: rucoon::runtime::Runtime<TASKS> = rucoon::runtime::Runtime::new();
 
 #[alloc_error_handler]
 fn alloc_error_handler(layout: alloc::alloc::Layout) -> ! {

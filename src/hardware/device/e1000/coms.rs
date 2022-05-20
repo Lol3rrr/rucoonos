@@ -1,4 +1,4 @@
-use crate::kernel::pci;
+use crate::hardware::pci;
 
 /// A small Abstraction for the Read/Write interactions with the Card
 #[derive(Debug, Clone)]

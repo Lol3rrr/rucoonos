@@ -7,10 +7,12 @@
 
 extern crate alloc;
 
+use core::alloc::LayoutErr;
 use core::panic::PanicInfo;
 
 use alloc::vec::Vec;
-use rucoonos::kernel::networking;
+use kernel::Kernel;
+use rucoonos::hardware::networking;
 use rucoonos::*;
 
 /// This function is called on panic.
@@ -30,9 +32,12 @@ fn panic(info: &PanicInfo) -> ! {
 bootloader::entry_point!(kernel_main);
 
 fn kernel_main(boot_info: &'static mut bootloader::BootInfo) -> ! {
-    let kernel = rucoonos::Kernel::init(boot_info);
+    let hardware = rucoonos::Hardware::init(boot_info);
 
-    if let Some(iter) = kernel.get_rsdt_entries() {
+    let kernel = Kernel::setup(hardware);
+    kernel.add_extension(crate::hardware::networking::NetworkExtension {});
+
+    if let Some(iter) = kernel.hardware().get_rsdt_entries() {
         for entry in iter {
             match entry {
                 acpi::acpi::AcipEntry::Apic(apic_entry) => {
@@ -56,7 +61,7 @@ fn kernel_main(boot_info: &'static mut bootloader::BootInfo) -> ! {
 
     if true {
         let mut tmp = Vec::new();
-        kernel.with_networking_device(|dev| {
+        kernel.hardware().with_networking_device(|dev| {
             let func = dev.blocking_init().unwrap();
             tmp.push(func);
         });
@@ -67,25 +72,26 @@ fn kernel_main(boot_info: &'static mut bootloader::BootInfo) -> ! {
     }
 
     let udp_listen = kernel
+        .hardware()
         .find_apply_device(
             |dev| match dev {
-                kernel::device::Device::Network(n_dev) => true,
+                hardware::device::Device::Network(n_dev) => true,
                 _ => false,
             },
             |dev| {
                 let n_dev = match dev {
-                    kernel::device::Device::Network(n) => n,
+                    hardware::device::Device::Network(n) => n,
                     _ => unreachable!(),
                 };
 
                 println!("Device-IP: {:?}", n_dev.metadata.ip);
 
-                kernel::api::networking::UDPListener::bind(8080, n_dev).unwrap()
+                hardware::api::networking::UDPListener::bind(8080, &n_dev).unwrap()
             },
         )
         .unwrap();
 
-    kernel.with_networking_device(|device| {
+    kernel.hardware().with_networking_device(|device| {
         let sender = &device.packet_queue;
         let meta = &device.metadata;
 
@@ -116,13 +122,12 @@ fn kernel_main(boot_info: &'static mut bootloader::BootInfo) -> ! {
 
     #[cfg(not(test))]
     {
-        kernel.add_task(tetris()).unwrap();
-        kernel.add_task(ping([192, 168, 178, 1])).unwrap();
-        kernel.add_task(udp_listener(udp_listen)).unwrap();
+        let k_handle = kernel.handle();
+        k_handle.add_task(tetris());
+        k_handle.add_task(ping([192, 168, 178, 1]));
+        k_handle.add_task(udp_listener(udp_listen));
 
-        if let Err(_) = kernel.start_runtime() {
-            println!("Error running Runtime");
-        }
+        kernel.run();
     }
 
     #[cfg(test)]
@@ -132,15 +137,15 @@ fn kernel_main(boot_info: &'static mut bootloader::BootInfo) -> ! {
 }
 
 async fn ping(target_ip: [u8; 4]) {
-    let kernel = kernel::KERNEL_INSTANCE.get().unwrap();
+    let kernel = hardware::KERNEL_INSTANCE.get().unwrap();
     let raw_net_dev = kernel
         .find_device_handle(|dev| match dev {
-            kernel::device::Device::Network(_) => true,
+            hardware::device::Device::Network(_) => true,
             _ => false,
         })
         .unwrap();
     let net_dev = match raw_net_dev {
-        kernel::device::DeviceHandle::Network(n) => n,
+        hardware::device::DeviceHandle::Network(n) => n,
         _ => unreachable!(),
     };
 
@@ -167,7 +172,7 @@ async fn ping(target_ip: [u8; 4]) {
     )
 }
 
-async fn udp_listener(udp_listener: kernel::api::networking::UDPListener) {
+async fn udp_listener(udp_listener: hardware::api::networking::UDPListener) {
     loop {
         let packet = match udp_listener.a_recv().await {
             Some(p) => p,

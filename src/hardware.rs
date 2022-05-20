@@ -4,7 +4,7 @@ use crate::{
     acpi::{self, OffsetMapper, RSDT},
     gdt, interrupts,
     memory::{self, BootInfoFrameAllocator},
-    println, RUNTIME,
+    println,
 };
 
 use alloc::{boxed::Box, collections::BTreeMap, vec::Vec};
@@ -20,10 +20,10 @@ mod pci;
 
 static MEMORY_MAPPING: spin::Once<OffsetPageTable> = spin::Once::new();
 
-pub static KERNEL_INSTANCE: spin::Once<Kernel> = spin::Once::new();
+pub static KERNEL_INSTANCE: spin::Once<Hardware> = spin::Once::new();
 
 /// This struct contains all the essential Data needed for the running kernel instance
-pub struct Kernel {
+pub struct Hardware {
     /// The parsed out RSDT
     rsdt: Option<(RSDT<OffsetMapper>, OffsetMapper)>,
     /// A list of all loaded Devices
@@ -32,7 +32,7 @@ pub struct Kernel {
     pub ips: networking::IpMap,
 }
 
-impl Kernel {
+impl Hardware {
     pub fn try_get() -> Option<&'static Self> {
         KERNEL_INSTANCE.get()
     }
@@ -170,17 +170,6 @@ impl Kernel {
         KERNEL_INSTANCE.call_once(|| instance)
     }
 
-    pub fn add_task<F>(&self, fut: F) -> Result<TaskID, AddTaskError>
-    where
-        F: Future + 'static,
-    {
-        RUNTIME.add_task(fut)
-    }
-
-    pub fn start_runtime(&self) -> Result<(), RunError> {
-        RUNTIME.run()
-    }
-
     pub fn get_rsdt_entries(&self) -> Option<impl Iterator<Item = acpi::acpi::AcipEntry> + '_> {
         let (rsdt, mapper) = self.rsdt.as_ref()?;
 
@@ -188,37 +177,6 @@ impl Kernel {
             rsdt.iter()
                 .map(|(header, ptr)| acpi::acpi::AcipEntry::load(header, ptr, mapper)),
         )
-    }
-
-    pub fn handle_networking_interrupt(&self) {
-        // println!("Kernel handle Networking Interrupt");
-
-        let mut devices = self.devices.lock();
-        for device in devices.iter_mut() {
-            let (n_device, meta, queue, raw_udp_bindings) = match device {
-                device::Device::Network(device::NetworkDevice {
-                    device,
-                    metadata,
-                    packet_queue,
-                    udp_bindings,
-                    ..
-                }) => (device, metadata, packet_queue, udp_bindings),
-                _ => continue,
-            };
-            let udp_bindings = raw_udp_bindings.lock();
-
-            if !n_device.handles_interrupt(0xb) {
-                continue;
-            }
-
-            let mut ctx = device::NetworkingCtx {
-                meta,
-                queue,
-                ips: &self.ips,
-                udp_bindings: &udp_bindings,
-            };
-            n_device.handle_interrupt(&mut ctx);
-        }
     }
 
     pub fn with_networking_device<F>(&self, mut func: F)

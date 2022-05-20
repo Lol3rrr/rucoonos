@@ -1,12 +1,14 @@
+use alloc::boxed::Box;
 use lazy_static::lazy_static;
 use pic8259::ChainedPics;
 use spin;
-use x86_64::structures::idt::{InterruptDescriptorTable, InterruptStackFrame, PageFaultErrorCode};
+use x86_64::structures::idt::{
+    Entry, HandlerFunc, InterruptDescriptorTable, InterruptStackFrame, PageFaultErrorCode,
+};
 
 use crate::{gdt, hlt_loop, println};
 
 mod keyboard;
-mod networking;
 mod timer;
 pub(crate) use timer::TIMER;
 
@@ -16,8 +18,63 @@ pub const PIC_2_OFFSET: u8 = 0x28;
 pub static PICS: spin::Mutex<ChainedPics> =
     spin::Mutex::new(unsafe { ChainedPics::new(PIC_1_OFFSET, PIC_2_OFFSET) });
 
+enum IDTStorage {
+    Initial(&'static InterruptDescriptorTable),
+    Heaped { idt: *mut InterruptDescriptorTable },
+}
+
+impl IDTStorage {
+    fn initial() -> Self {
+        Self::Initial(&InitialIDT)
+    }
+
+    fn new(idt: Box<InterruptDescriptorTable>) -> Self {
+        let idt_ptr = Box::into_raw(idt);
+        Self::Heaped { idt: idt_ptr }
+    }
+
+    fn idt(&self) -> InterruptDescriptorTable {
+        match self {
+            Self::Initial(idt) => (*idt).clone(),
+            Self::Heaped { idt } => {
+                let refed: &InterruptDescriptorTable = unsafe { &**idt };
+                InterruptDescriptorTable::clone(refed)
+            }
+        }
+    }
+
+    fn load(&self) {
+        match self {
+            Self::Initial(idt) => {
+                idt.load();
+            }
+            Self::Heaped { idt } => {
+                let refed: &InterruptDescriptorTable = unsafe { &**idt };
+                unsafe {
+                    refed.load_unsafe();
+                }
+            }
+        }
+    }
+}
+
+unsafe impl Sync for IDTStorage {}
+unsafe impl Send for IDTStorage {}
+
+impl Drop for IDTStorage {
+    fn drop(&mut self) {
+        match self {
+            Self::Initial(_) => {}
+            Self::Heaped { idt } => {
+                let boxed = unsafe { Box::from_raw(*idt) };
+                drop(boxed);
+            }
+        }
+    }
+}
+
 lazy_static! {
-    static ref IDT: InterruptDescriptorTable = {
+    static ref InitialIDT: InterruptDescriptorTable = {
         let mut idt = InterruptDescriptorTable::new();
 
         idt.breakpoint.set_handler_fn(breakpoint_handler);
@@ -32,14 +89,14 @@ lazy_static! {
         idt[InterruptIndex::Timer.as_usize()].set_handler_fn(timer::timer_interrupt_handler);
         idt[InterruptIndex::Keyboard.as_usize()]
             .set_handler_fn(keyboard::keyboard_interrupt_handler);
-        idt[PIC_1_OFFSET as usize + 0xb].set_handler_fn(networking::network_interrupt);
 
         idt
     };
+    static ref IDT: spin::RwLock<IDTStorage> = spin::RwLock::new(IDTStorage::initial());
 }
 
 pub fn init_idt() {
-    IDT.load();
+    IDT.read().load();
 
     // Simply allow ALL the Interrupts
     unsafe {
@@ -51,8 +108,19 @@ pub fn init_idt() {
     }
 }
 
-pub unsafe fn set_interrupt(line: usize) {
-    // TODO
+pub unsafe fn set_interrupt(line: usize, entry: HandlerFunc) {
+    let mut n_idt = IDT.read().idt();
+
+    n_idt[line].set_handler_fn(entry);
+
+    x86_64::instructions::interrupts::without_interrupts(|| {
+        let mut writer = IDT.write();
+        let old_idt: IDTStorage = core::mem::replace(&mut writer, IDTStorage::new(Box::new(n_idt)));
+
+        writer.load();
+
+        drop(old_idt);
+    });
 }
 
 extern "x86-interrupt" fn breakpoint_handler(stack_frame: InterruptStackFrame) {

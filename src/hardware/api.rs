@@ -1,5 +1,5 @@
 pub mod networking {
-    use crate::kernel::{
+    use crate::hardware::{
         device::{NetworkDevice, PacketQueueSender},
         networking,
     };

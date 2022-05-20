@@ -72,7 +72,6 @@ impl RSDP {
     }
 }
 
-#[derive(Debug)]
 #[repr(packed)]
 pub struct SDTHeader {
     signature: [u8; 4],

@@ -3,7 +3,6 @@ use super::{Mapper, PhysicalPtr, SDTHeader};
 mod aml;
 
 pub mod raw {
-    #[derive(Debug)]
     #[repr(packed)]
     pub struct GenericAddressStructure {
         pub address_space: u8,
@@ -13,7 +12,6 @@ pub mod raw {
         pub address: u64,
     }
 
-    #[derive(Debug)]
     #[repr(packed)]
     pub struct FADT {
         pub firmware_ctrl: u32,

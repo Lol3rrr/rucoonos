@@ -2,15 +2,13 @@ use core::arch::asm;
 
 use x86_64::structures::idt::InterruptStackFrame;
 
-use crate::TASKS;
-
 use super::{InterruptIndex, PICS};
 
 const FREQUENCY: usize = 100;
 const MSTIME: usize = 1000 / FREQUENCY;
 const DIVISOR: u16 = (1193182 / FREQUENCY) as u16;
 
-pub(crate) static TIMER: rucoon::extensions::time::Timer<TASKS> =
+pub(crate) static TIMER: rucoon::extensions::time::Timer<100> =
     rucoon::extensions::time::Timer::new(MSTIME as u128);
 
 pub extern "x86-interrupt" fn timer_interrupt_handler(_stack_frame: InterruptStackFrame) {
