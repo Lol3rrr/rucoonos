@@ -4,6 +4,7 @@ use alloc::{
     boxed::Box,
     collections::{BTreeMap, VecDeque},
     sync::Arc,
+    vec::Vec,
 };
 
 use crate::{hardware::networking::arp, println};
@@ -21,6 +22,7 @@ pub enum Device {
 }
 
 pub struct NetworkDevice {
+    pub mac: [u8; 6],
     /// A handle to the actual underlying Device/Driver
     pub device: Box<dyn NetworkingDevice + Send + 'static>,
     /// The Queue to enqueue Packets on to send out over the Queue
@@ -45,7 +47,7 @@ pub struct NetworkingDeviceHandle {
 pub struct NetworkingMetadata {
     pub mac: [u8; 6],
     pub ip: Option<[u8; 4]>,
-    dhcp: DHCPExchange,
+    pub dhcp: DHCPExchange,
 }
 
 pub enum DHCPExchange {
@@ -64,11 +66,19 @@ pub enum DHCPExchange {
 }
 
 pub trait NetworkingDevice {
+    fn id(&self) -> usize;
+
+    fn mac_address(&self) -> [u8; 6];
+
     /// Checks if the Networking Device is registered for a given interrupt
     fn handles_interrupt(&self, irq_offset: u8) -> bool;
 
     /// Gets called if an interrupt occurs for the Networking Device
-    fn handle_interrupt(&mut self, ctx: &mut NetworkingCtx);
+    fn handle_interrupt(
+        &mut self,
+        ctx: &mut NetworkingCtx,
+        queue: &nolock::queues::mpsc::jiffy::AsyncSender<crate::extensions::HandlerMessage>,
+    );
 }
 
 pub struct NetworkingCtx<'m> {
@@ -83,6 +93,7 @@ pub struct E1000Driver {}
 
 impl E1000Driver {
     pub fn new(
+        id: usize,
         device: pci::Device,
         offset: u64,
     ) -> Result<(impl NetworkingDevice, NetworkingMetadata, PacketQueueSender), ()> {
@@ -93,7 +104,7 @@ impl E1000Driver {
                 let bar = base_addresses[0].clone();
 
                 let (sender, receiver) = create_packetqueue();
-                let (card, send_notify) = e1000::E1000Card::init(bar, offset, receiver);
+                let (card, send_notify) = e1000::E1000Card::init(id, bar, offset, receiver);
                 (card, sender(send_notify))
             }
             _ => return Err(()),
@@ -139,7 +150,7 @@ impl NetworkDevice {
 }
 
 impl<'m> NetworkingCtx<'m> {
-    pub fn handle_packet(&mut self, raw_packet: &[u8]) {
+    pub fn handle_packet_(&mut self, raw_packet: &[u8]) {
         let buffer = networking::Buffer::new(raw_packet);
 
         let eth_packet = networking::ethernet::Packet::new(buffer);

@@ -24,6 +24,7 @@ pub mod hardware;
 pub use hardware::Hardware;
 
 pub mod acpi;
+pub mod extensions;
 pub mod gdt;
 pub mod interrupts;
 pub mod memory;

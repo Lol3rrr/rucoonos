@@ -27,9 +27,8 @@ pub struct Hardware {
     /// The parsed out RSDT
     rsdt: Option<(RSDT<OffsetMapper>, OffsetMapper)>,
     /// A list of all loaded Devices
-    devices: spin::Mutex<Vec<device::Device>>,
-    /// A Map from all known IPs to their respective MAC-Addresses
-    pub ips: networking::IpMap,
+    pub(crate) devices: spin::Mutex<Vec<device::Device>>,
+    memory_offset: Option<u64>,
 }
 
 impl Hardware {
@@ -102,6 +101,14 @@ impl Hardware {
         mapper
     }
 
+    pub fn pci_devices(&self) -> impl Iterator<Item = pci::Device> {
+        pci::bruteforce()
+    }
+
+    pub fn memory_offset(&self) -> Option<u64> {
+        self.memory_offset.clone()
+    }
+
     /// This is used to obtain configuration about PCI
     fn setup_pci(physical_memory_offset: Optional<u64>) -> Vec<device::Device> {
         let offset = match physical_memory_offset {
@@ -118,24 +125,8 @@ impl Hardware {
                 )
             })
             .filter_map(|header| {
-                if header.generic.id == 0x100E && header.generic.vendor_id == 0x8086 {
-                    println!("E1000 Networking Controller: {:?}", header);
-
-                    match device::E1000Driver::new(header, offset) {
-                        Ok((n_device, meta, n_queue)) => {
-                            Some(device::Device::Network(device::NetworkDevice {
-                                device: Box::new(n_device),
-                                metadata: meta,
-                                packet_queue: n_queue,
-                                udp_bindings: spin::Mutex::new(BTreeMap::new()),
-                            }))
-                        }
-                        Err(_) => None,
-                    }
-                } else {
-                    println!("Unknown Networking-Device: {:?}", header);
-                    None
-                }
+                println!("Unknown PCI-Device: {:?}", header);
+                None
             })
             .collect()
     }
@@ -165,7 +156,7 @@ impl Hardware {
         let instance = Self {
             rsdt,
             devices: spin::Mutex::new(devices),
-            ips: networking::IpMap::new(),
+            memory_offset: boot_info.physical_memory_offset.into(),
         };
         KERNEL_INSTANCE.call_once(|| instance)
     }

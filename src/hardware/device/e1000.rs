@@ -1,4 +1,4 @@
-use alloc::boxed::Box;
+use alloc::{boxed::Box, vec::Vec};
 use x86_64::structures::paging::Translate;
 
 // https://br.mouser.com/datasheet/2/612/i217_ethernet_controller_datasheet-257741.pdf
@@ -6,6 +6,7 @@ use x86_64::structures::paging::Translate;
 use crate::hardware::{allocator, networking, pci, MEMORY_MAPPING};
 
 pub struct E1000Card {
+    id: usize,
     com: Coms,
     has_eeprom: bool,
     rx_ptr: x86_64::VirtAddr,
@@ -130,6 +131,7 @@ const TX_DESC: usize = 8;
 
 impl E1000Card {
     pub fn init(
+        id: usize,
         bar: pci::BaseAddressRegister,
         offset: u64,
         packet_queue: PacketQueueReceiver,
@@ -245,6 +247,7 @@ impl E1000Card {
 
         (
             Self {
+                id,
                 com: coms.clone(),
                 has_eeprom,
                 rx_ptr: rx_desc_ptrs,
@@ -361,11 +364,23 @@ impl E1000Card {
 }
 
 impl NetworkingDevice for E1000Card {
+    fn id(&self) -> usize {
+        self.id
+    }
+
+    fn mac_address(&self) -> [u8; 6] {
+        self.read_mac_address()
+    }
+
     fn handles_interrupt(&self, irq_offset: u8) -> bool {
         irq_offset == 0xb
     }
 
-    fn handle_interrupt(&mut self, ctx: &mut NetworkingCtx) {
+    fn handle_interrupt(
+        &mut self,
+        ctx: &mut NetworkingCtx,
+        queue: &nolock::queues::mpsc::jiffy::AsyncSender<crate::extensions::HandlerMessage>,
+    ) {
         let cause = self.get_intterupt_cause();
 
         if cause.rxt {
@@ -383,7 +398,13 @@ impl NetworkingDevice for E1000Card {
                 let addr = self.rx_buffers[self.cur_rx as usize];
                 let slice = unsafe { core::slice::from_raw_parts(addr, len as usize) };
 
-                ctx.handle_packet(slice);
+                let buffer = crate::hardware::networking::Buffer::new(slice);
+                let _ = queue.enqueue(crate::extensions::HandlerMessage::Packet(
+                    crate::extensions::RawPacket {
+                        buffer,
+                        id: self.id,
+                    },
+                ));
 
                 desc.status = 0;
                 unsafe {

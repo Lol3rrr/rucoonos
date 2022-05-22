@@ -8,6 +8,9 @@ use x86_64::structures::idt::{
 
 use crate::{gdt, hlt_loop, println};
 
+mod done_guard;
+pub use done_guard::InterruptDoneGuard;
+
 mod keyboard;
 mod timer;
 pub(crate) use timer::TIMER;
