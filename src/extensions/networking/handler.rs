@@ -3,15 +3,15 @@ use core::sync::atomic::{AtomicBool, Ordering};
 use alloc::{collections::BTreeMap, sync::Arc};
 
 use crate::{
-    extensions::ActionRequest,
-    hardware::{
-        device::DHCPExchange,
-        networking::{self, arp, ethernet::EthType, Buffer},
-    },
+    extensions::{protocols, ActionRequest},
+    hardware::device::DHCPExchange,
     println,
 };
 
-use super::{HandlerMessage, RawPacket, DEVICES_, IPS};
+use super::{
+    protocols::{arp, ethernet::EthType},
+    HandlerMessage, RawPacket, DEVICES_, IPS,
+};
 
 /// This handler will actually properly handle all the Packets that were received by the Network Card
 pub async fn network_handler(
@@ -29,7 +29,7 @@ pub async fn network_handler(
             };
 
             device.packet_queue.enqueue(
-                networking::dhcp::discover_message(device.metadata.mac.clone(), tx_id).unwrap(),
+                protocols::dhcp::discover_message(device.metadata.mac.clone(), tx_id).unwrap(),
             );
         }
     });
@@ -39,7 +39,7 @@ pub async fn network_handler(
 
     let mut udp_bindings: BTreeMap<
         u16,
-        nolock::queues::mpmc::bounded::scq::Sender<networking::udp::Packet>,
+        nolock::queues::mpmc::bounded::scq::Sender<protocols::udp::Packet>,
     > = BTreeMap::new();
 
     let mut arp_bindings: BTreeMap<
@@ -78,7 +78,7 @@ pub async fn network_handler(
                         x86_64::instructions::interrupts::without_interrupts(|| {
                             for device in DEVICES_.get().expect("").lock().iter() {
                                 device.packet_queue.enqueue(
-                                    crate::hardware::networking::arp::PacketBuilder::new()
+                                    protocols::arp::PacketBuilder::new()
                                         .sender(
                                             device.metadata.mac.clone(),
                                             device.metadata.ip.unwrap_or([0, 0, 0, 0]),
@@ -87,9 +87,7 @@ pub async fn network_handler(
                                             [0xff, 0xff, 0xff, 0xff, 0xff, 0xff],
                                             ip.clone(),
                                         )
-                                        .operation(
-                                            crate::hardware::networking::arp::Operation::Request,
-                                        )
+                                        .operation(protocols::arp::Operation::Request)
                                         .finish()
                                         .unwrap(),
                                 );
@@ -111,7 +109,7 @@ fn handle_packet_(
     raw: RawPacket,
     udp_bindings: &BTreeMap<
         u16,
-        nolock::queues::mpmc::bounded::scq::Sender<crate::hardware::networking::udp::Packet>,
+        nolock::queues::mpmc::bounded::scq::Sender<protocols::udp::Packet>,
     >,
     arp_bindings: &mut BTreeMap<
         [u8; 4],
@@ -127,7 +125,7 @@ fn handle_packet_(
         .find(|d| d.device.id() == raw.id)
         .unwrap();
 
-    let eth_packet = networking::ethernet::Packet::new(buffer);
+    let eth_packet = protocols::ethernet::Packet::new(buffer);
 
     let destination = eth_packet.destination_mac();
     if destination != [0xff, 0xff, 0xff, 0xff, 0xff, 0xff] && destination != device.metadata.mac {
@@ -137,7 +135,7 @@ fn handle_packet_(
     let ty = eth_packet.ether_type();
     match ty {
         EthType::Arp => {
-            let arp_packet = networking::arp::Packet::new(eth_packet).unwrap();
+            let arp_packet = protocols::arp::Packet::new(eth_packet).unwrap();
 
             match arp_packet.operation() {
                 arp::Operation::Request => {
@@ -150,10 +148,10 @@ fn handle_packet_(
                     }
 
                     device.packet_queue.enqueue(
-                        networking::arp::PacketBuilder::new()
+                        protocols::arp::PacketBuilder::new()
                             .sender(device.metadata.mac.clone(), ip.clone())
                             .destination(arp_packet.src_mac, arp_packet.src_ip)
-                            .operation(networking::arp::Operation::Response)
+                            .operation(protocols::arp::Operation::Response)
                             .finish()
                             .unwrap(),
                     );
@@ -176,14 +174,14 @@ fn handle_packet_(
             println!("WakeOnLan: {:?}", eth_packet.content());
         }
         EthType::Ipv4 => {
-            let ip_packet = networking::ipv4::Packet::new(eth_packet);
+            let ip_packet = protocols::ipv4::Packet::new(eth_packet);
 
             match ip_packet.header().protocol {
-                networking::ipv4::Protocol::Icmp => {
-                    let icmp_packet = networking::icmp::Packet::new(ip_packet);
+                protocols::ipv4::Protocol::Icmp => {
+                    let icmp_packet = protocols::icmp::Packet::new(ip_packet);
 
                     match icmp_packet.get_type() {
-                        networking::icmp::Type::EchoRequest {
+                        protocols::icmp::Type::EchoRequest {
                             sequence,
                             identifier,
                         } => {
@@ -223,20 +221,20 @@ fn handle_packet_(
                             */
                             todo!("")
                         }
-                        networking::icmp::Type::EchoReply { .. } => {
+                        protocols::icmp::Type::EchoReply { .. } => {
                             println!("Echo Reply");
                         }
-                        networking::icmp::Type::Unknown(d) => {
+                        protocols::icmp::Type::Unknown(d) => {
                             println!("Unknown ICMP: {:?}", d);
                         }
                     };
                 }
-                networking::ipv4::Protocol::Udp => {
-                    let udp_packet = networking::udp::Packet::new(ip_packet);
+                protocols::ipv4::Protocol::Udp => {
+                    let udp_packet = protocols::udp::Packet::new(ip_packet);
 
                     let udp_header = udp_packet.header();
                     if udp_header.source_port == 67 && udp_header.destination_port == 68 {
-                        let dhcp_packet = networking::dhcp::Packet::new(udp_packet);
+                        let dhcp_packet = protocols::dhcp::Packet::new(udp_packet);
                         let dhcp_data = dhcp_packet.get();
 
                         match (
@@ -248,13 +246,13 @@ fn handle_packet_(
                                     transaction_id,
                                     indicator,
                                 },
-                                networking::dhcp::Operation::Offer,
+                                protocols::dhcp::Operation::Offer,
                             ) if transaction_id == dhcp_data.xid => {
                                 let offered_ip = dhcp_data.yiaddr;
                                 let server_ip = dhcp_data.siaddr;
 
                                 device.packet_queue.enqueue(
-                                    networking::dhcp::request_message(
+                                    protocols::dhcp::request_message(
                                         device.metadata.mac.clone(),
                                         transaction_id,
                                         offered_ip.clone(),
@@ -277,7 +275,7 @@ fn handle_packet_(
                                     own_ip,
                                     ..
                                 },
-                                networking::dhcp::Operation::Ack,
+                                protocols::dhcp::Operation::Ack,
                             ) if transaction_id == dhcp_data.xid => {
                                 device.metadata.dhcp = DHCPExchange::Done;
                                 device.metadata.ip = Some(own_ip);
@@ -302,10 +300,10 @@ fn handle_packet_(
                         };
                     }
                 }
-                networking::ipv4::Protocol::Tcp => {
+                protocols::ipv4::Protocol::Tcp => {
                     println!("TCP-Packet");
                 }
-                networking::ipv4::Protocol::Unknown(unknown) => {
+                protocols::ipv4::Protocol::Unknown(unknown) => {
                     println!("Unknown({:?})-Packet", unknown);
                 }
             };

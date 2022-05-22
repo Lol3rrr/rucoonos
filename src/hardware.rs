@@ -15,7 +15,6 @@ use x86_64::{structures::paging::OffsetPageTable, VirtAddr};
 mod allocator;
 pub mod api;
 pub mod device;
-pub mod networking;
 mod pci;
 
 static MEMORY_MAPPING: spin::Once<OffsetPageTable> = spin::Once::new();

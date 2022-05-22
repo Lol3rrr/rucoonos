@@ -1,13 +1,13 @@
 pub mod networking {
-    use crate::hardware::{
-        device::{NetworkDevice, PacketQueueSender},
-        networking,
+    use crate::{
+        extensions::protocols,
+        hardware::device::{NetworkDevice, PacketQueueSender},
     };
 
     pub struct UDPListener {
         port: u16,
         sender: PacketQueueSender,
-        receiver: nolock::queues::mpmc::bounded::scq::Receiver<networking::udp::Packet>,
+        receiver: nolock::queues::mpmc::bounded::scq::Receiver<protocols::udp::Packet>,
     }
 
     impl UDPListener {
@@ -31,11 +31,11 @@ pub mod networking {
             })
         }
 
-        pub fn try_recv(&self) -> Option<networking::udp::Packet> {
+        pub fn try_recv(&self) -> Option<protocols::udp::Packet> {
             self.receiver.try_dequeue().ok()
         }
 
-        pub async fn a_recv(&self) -> Option<networking::udp::Packet> {
+        pub async fn a_recv(&self) -> Option<protocols::udp::Packet> {
             loop {
                 if let Some(p) = self.try_recv() {
                     return Some(p);

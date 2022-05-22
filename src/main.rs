@@ -12,7 +12,7 @@ use core::panic::PanicInfo;
 
 use alloc::vec::Vec;
 use kernel::Kernel;
-use rucoonos::hardware::networking;
+use rucoonos::extensions::protocols;
 use rucoonos::*;
 
 /// This function is called on panic.
@@ -96,15 +96,15 @@ fn kernel_main(boot_info: &'static mut bootloader::BootInfo) -> ! {
 
         // Send an empty UDP Packet
         sender.enqueue(
-            networking::udp::PacketBuilder::new()
+            protocols::udp::PacketBuilder::new()
                 .source_port(68)
                 .destination_port(67)
                 .finish(
-                    networking::ipv4::PacketBuilder::new()
+                    protocols::ipv4::PacketBuilder::new()
                         .dscp(0)
                         .identification(0x2345)
                         .ttl(20)
-                        .protocol(networking::ipv4::Protocol::Udp)
+                        .protocol(protocols::ipv4::Protocol::Udp)
                         .source([0, 0, 0, 0], meta.mac.clone())
                         .destination([255, 255, 255, 255], [0xff, 0xff, 0xff, 0xff, 0xff, 0xff]),
                     |buffer| {
@@ -153,17 +153,17 @@ async fn ping(target_ip: [u8; 4]) {
     };
 
     net_dev.p_queue.enqueue(
-        networking::icmp::PacketBuilder::new()
-            .set_type(networking::icmp::Type::EchoRequest {
+        protocols::icmp::PacketBuilder::new()
+            .set_type(protocols::icmp::Type::EchoRequest {
                 identifier: 123,
                 sequence: 224,
             })
             .finish(
-                networking::ipv4::PacketBuilder::new()
+                protocols::ipv4::PacketBuilder::new()
                     .dscp(0)
                     .identification(123)
                     .ttl(20)
-                    .protocol(networking::ipv4::Protocol::Icmp)
+                    .protocol(protocols::ipv4::Protocol::Icmp)
                     .source(net_dev.ip.unwrap(), net_dev.mac)
                     .destination(target_ip, mac),
                 |_| Ok(0),

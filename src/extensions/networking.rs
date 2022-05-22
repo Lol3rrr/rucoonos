@@ -15,15 +15,17 @@ use crate::{
 mod cards;
 mod handler;
 
+pub mod protocols;
+
 static HANDLE_QUEUE: spin::Once<nolock::queues::mpsc::jiffy::AsyncSender<HandlerMessage>> =
     spin::Once::new();
 static DEVICES_: spin::Once<spin::Mutex<Vec<hardware::device::NetworkDevice>>> = spin::Once::new();
-static IPS: spin::Once<hardware::networking::IpMap> = spin::Once::new();
+static IPS: spin::Once<protocols::IpMap> = spin::Once::new();
 static DEVICE_QUEUES: spin::Once<BTreeMap<usize, PacketQueueSender>> = spin::Once::new();
 
 pub struct RawPacket {
     pub id: usize,
-    pub buffer: crate::hardware::networking::Buffer,
+    pub buffer: protocols::Buffer,
 }
 
 pub struct NetworkExtension {}
@@ -83,7 +85,7 @@ impl kernel::Extension<&Hardware> for NetworkExtension {
         let (paket_recv, paket_sender) = nolock::queues::mpsc::jiffy::async_queue();
         HANDLE_QUEUE.call_once(|| paket_sender);
 
-        IPS.call_once(|| hardware::networking::IpMap::new());
+        IPS.call_once(|| protocols::IpMap::new());
 
         // We need to enable the Networking Intterupt for the Network Card
         unsafe {
@@ -152,13 +154,13 @@ pub async fn get_mac_(ip: [u8; 4]) -> [u8; 6] {
         x86_64::instructions::interrupts::without_interrupts(|| {
             for device in DEVICES_.get().expect("").lock().iter() {
                 device.packet_queue.enqueue(
-                    hardware::networking::arp::PacketBuilder::new()
+                    protocols::arp::PacketBuilder::new()
                         .sender(
                             device.metadata.mac.clone(),
                             device.metadata.ip.unwrap_or([0, 0, 0, 0]),
                         )
                         .destination([0xff, 0xff, 0xff, 0xff, 0xff, 0xff], ip.clone())
-                        .operation(hardware::networking::arp::Operation::Request)
+                        .operation(protocols::arp::Operation::Request)
                         .finish()
                         .unwrap(),
                 );

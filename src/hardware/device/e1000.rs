@@ -3,7 +3,7 @@ use x86_64::structures::paging::Translate;
 
 // https://br.mouser.com/datasheet/2/612/i217_ethernet_controller_datasheet-257741.pdf
 
-use crate::hardware::{allocator, networking, pci, MEMORY_MAPPING};
+use crate::hardware::{allocator, pci, MEMORY_MAPPING};
 
 pub struct E1000Card {
     id: usize,
@@ -398,7 +398,7 @@ impl NetworkingDevice for E1000Card {
                 let addr = self.rx_buffers[self.cur_rx as usize];
                 let slice = unsafe { core::slice::from_raw_parts(addr, len as usize) };
 
-                let buffer = crate::hardware::networking::Buffer::new(slice);
+                let buffer = crate::extensions::protocols::Buffer::new(slice);
                 let _ = queue.enqueue(crate::extensions::HandlerMessage::Packet(
                     crate::extensions::RawPacket {
                         buffer,
@@ -455,7 +455,10 @@ impl NetworkingDevice for E1000Card {
 
                 let tx_data_ptr = self.tx_buffers[tx_index as usize];
                 let buffer = unsafe {
-                    networking::Buffer::from_raw(tx_data_ptr as *mut u8 as *mut [u8; 2048], 0)
+                    crate::extensions::protocols::Buffer::from_raw(
+                        tx_data_ptr as *mut u8 as *mut [u8; 2048],
+                        0,
+                    )
                 };
                 drop(buffer);
 
