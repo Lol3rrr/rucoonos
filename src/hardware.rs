@@ -19,7 +19,7 @@ mod rng;
 
 static MEMORY_MAPPING: spin::Once<OffsetPageTable> = spin::Once::new();
 
-pub static KERNEL_INSTANCE: spin::Once<Hardware> = spin::Once::new();
+static KERNEL_INSTANCE: spin::Once<Hardware> = spin::Once::new();
 
 /// This struct contains all the essential Data needed for the running kernel instance
 pub struct Hardware {

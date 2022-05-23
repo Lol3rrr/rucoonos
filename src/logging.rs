@@ -1,3 +1,26 @@
+/// The logging works by having two mostly seperated components, the Writer and the Subscriber.
+///
+/// # Writer
+/// The Writer is a simple "Process" that waits for things to output. It receives Data from the
+/// Queue and then writes that, with the correct Formatting, out.
+///
+/// # Subscriber
+/// The Subscriber simply takes all the tracing information and converts the Information into
+/// their corresponding Events to send over the Queue to the Writer
+///
+/// # Benefits
+/// Decoupling these Parts allows for easy seperation of concerns and means that logging should be
+/// very fast as we only need to add the correct Data to the Queue, which requires little extra
+/// synchronization.
+/// In general this avoids any form of locking and can therefore not cause any deadlocks or other
+/// weird synchronization problems
+///
+/// # Problems
+/// The asynchronous nature of this design also poses the Problem that in the Event of a crash
+/// or other Problem, the already written Logs might not contain all the logs and there may be
+/// some pending Logs in the Queue.
+/// This might be solveable by allowing the Panic-Handler to hook into the Queue and force output
+/// all the pending logs.
 use core::{
     fmt::{Display, Write},
     future::Future,

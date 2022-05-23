@@ -148,7 +148,7 @@ fn kernel_main(boot_info: &'static mut bootloader::BootInfo) -> ! {
 }
 
 async fn ping(target_ip: [u8; 4]) {
-    let kernel = hardware::KERNEL_INSTANCE.get().unwrap();
+    let kernel = hardware::Hardware::try_get().unwrap();
 
     let mac = crate::extensions::get_mac(target_ip).await.expect("");
     println!("Own-Mac {:?}", mac);

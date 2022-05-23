@@ -1,3 +1,28 @@
+/// The Network extensions contains all the Logic for Networking.
+/// It consists of two Parts, the Interrupt-Handler and the Handler
+///
+/// # Purpose
+/// The Networking Extension provides all the functionality needed for basic Network Operation
+///
+/// # Interrupt Handler
+/// The Interrupt Handler is responsible for taking all the Packet to send out from the
+/// Packet-Queue and actually sending them over the Network-Card.
+/// The Interrupt Handler is also responsible for loading all the received Packets into extra
+/// Buffers and enqueue them to be handled by the Handler, this simply boils down to allocating
+/// the correct Buffer size and copying all the Data over and enqueuing said Buffer.
+///
+/// # Handler
+/// The Handler receives two different Types of Events from its Queue.
+/// ## Packet-Event
+/// A Packet event simply inidcates that the Network Card received a Packet and that now needs to
+/// be parsed and handled accordingly.
+///
+/// ## Action-Event
+/// An Action Event indicates an Event initiated by a User to perform some Action
+///
+/// # API Implementation
+/// The API mainly works by sending Action events to the Handler, which then register some form
+/// of listener or Callback
 use alloc::{boxed::Box, collections::BTreeMap, sync::Arc, vec::Vec};
 
 use kernel::Kernel;
@@ -11,6 +36,9 @@ use crate::{
     interrupts::{self, InterruptDoneGuard},
     println, Hardware,
 };
+
+mod api;
+pub use api::*;
 
 mod cards;
 mod handler;
@@ -147,43 +175,6 @@ fn handle_interrupt(queue: Option<&nolock::queues::mpsc::jiffy::AsyncSender<Hand
     }
 }
 
-pub async fn get_mac_(ip: [u8; 4]) -> [u8; 6] {
-    let ips = IPS.get().expect("");
-    if let Some(mac) = ips.try_get(&ip) {
-        return mac;
-    }
-
-    {
-        x86_64::instructions::interrupts::without_interrupts(|| {
-            for device in DEVICES_.get().expect("").lock().iter() {
-                device.packet_queue.enqueue(
-                    protocols::arp::PacketBuilder::new()
-                        .sender(
-                            device.metadata.mac.clone(),
-                            device.metadata.ip.unwrap_or([0, 0, 0, 0]),
-                        )
-                        .destination([0xff, 0xff, 0xff, 0xff, 0xff, 0xff], ip.clone())
-                        .operation(protocols::arp::Operation::Request)
-                        .finish()
-                        .unwrap(),
-                );
-            }
-        });
-    }
-
-    loop {
-        if let Some(mac) = ips.try_get(&ip) {
-            return mac;
-        }
-
-        rucoon::extensions::time::sleep(
-            &crate::interrupts::TIMER,
-            core::time::Duration::from_millis(2),
-        )
-        .await;
-    }
-}
-
 pub struct NetworkHandle {
     queues: BTreeMap<usize, PacketQueueSender>,
 }
@@ -227,19 +218,4 @@ pub enum ActionRequest {
         /// The Mac-Address of the Target IP
         mac: [u8; 6],
     },
-}
-
-pub async fn get_mac(ip: [u8; 4]) -> Option<[u8; 6]> {
-    let queue = HANDLE_QUEUE.get().expect("");
-
-    let (mut recv, send) = nolock::queues::spsc::bounded::async_queue(1);
-
-    queue
-        .enqueue(HandlerMessage::Action(ActionRequest::SendArpRequest {
-            ip,
-            ret_queue: send,
-        }))
-        .ok()?;
-
-    recv.dequeue().await.ok()
 }
