@@ -25,6 +25,8 @@ nolock = { git = "https://github.com/Lol3rrr/nolock.git", rev = "6d6df6cdd6ee890
 
 kernel = { path = "./kernel" }
 
+tracing = { version = "0.1", default-features = false, features = ["attributes"] }
+
 [dependencies.lazy_static]
 version = "1.0"
 features = ["spin_no_std"]

@@ -12,7 +12,7 @@
 #![feature(const_ptr_write)]
 #![feature(const_ptr_offset)]
 #![feature(const_maybe_uninit_as_mut_ptr)]
-//
+// Some Lints used for better style
 #![allow(missing_docs)]
 #![deny(unsafe_op_in_unsafe_fn)]
 
@@ -31,6 +31,8 @@ pub mod memory;
 pub mod serial;
 pub mod vga;
 pub mod video;
+
+pub mod logging;
 
 pub mod futures;
 

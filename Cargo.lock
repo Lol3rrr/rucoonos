@@ -326,6 +326,7 @@ dependencies = [
  "pic8259",
  "rucoon",
  "spin 0.9.2",
+ "tracing",
  "uart_16550",
  "volatile 0.2.7",
  "x86_64",

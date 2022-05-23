@@ -99,7 +99,10 @@ impl kernel::Extension<&Hardware> for NetworkExtension {
 
 /// The Interrupt Handler for networking Interrupts
 extern "x86-interrupt" fn network_interrupt(_stack_frame: InterruptStackFrame) {
-    handle_interrupt(HANDLE_QUEUE.get());
+    let span = tracing::error_span!("Networking-Interrupt");
+    span.in_scope(|| {
+        handle_interrupt(HANDLE_QUEUE.get());
+    });
 
     unsafe {
         interrupts::PICS
@@ -112,7 +115,7 @@ fn handle_interrupt(queue: Option<&nolock::queues::mpsc::jiffy::AsyncSender<Hand
     let pqueue = match queue {
         Some(q) => q,
         None => {
-            println!("PacketQueue not initialized");
+            tracing::error!("PacketQueue not initialized");
             return;
         }
     };
@@ -226,15 +229,17 @@ pub enum ActionRequest {
     },
 }
 
-pub async fn get_mac(ip: [u8; 4]) -> [u8; 6] {
+pub async fn get_mac(ip: [u8; 4]) -> Option<[u8; 6]> {
     let queue = HANDLE_QUEUE.get().expect("");
 
     let (mut recv, send) = nolock::queues::spsc::bounded::async_queue(1);
 
-    queue.enqueue(HandlerMessage::Action(ActionRequest::SendArpRequest {
-        ip,
-        ret_queue: send,
-    }));
+    queue
+        .enqueue(HandlerMessage::Action(ActionRequest::SendArpRequest {
+            ip,
+            ret_queue: send,
+        }))
+        .ok()?;
 
-    recv.dequeue().await.unwrap()
+    recv.dequeue().await.ok()
 }

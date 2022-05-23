@@ -14,6 +14,7 @@ use super::{
 };
 
 /// This handler will actually properly handle all the Packets that were received by the Network Card
+#[tracing::instrument(name = "network_handler")]
 pub async fn network_handler(
     mut paket_recv: nolock::queues::mpsc::jiffy::AsyncReceiver<HandlerMessage>,
 ) {
@@ -35,7 +36,7 @@ pub async fn network_handler(
     });
     let _ = device_list;
 
-    println!("After Init");
+    tracing::info!("After Init");
 
     let mut udp_bindings: BTreeMap<
         u16,
@@ -51,27 +52,27 @@ pub async fn network_handler(
     // TODO
     // Probably add something to cancel this when the extension is "unloaded" (although not yet possible)
     loop {
-        println!("[Network-Handler] Waiting...");
+        tracing::debug!("Waiting...");
 
         // Get the Raw Packet information from the Queue
         let raw_message = match paket_recv.dequeue().await {
             Ok(p) => p,
             Err(e) => {
-                println!("Error getting Paket: {:?}", e);
+                tracing::error!("Getting Packet {:?}", e);
                 return;
             }
         };
 
         match raw_message {
             HandlerMessage::Packet(raw_paket) => {
-                println!("Got Raw-Packet");
+                tracing::debug!("Raw-Packet");
 
                 x86_64::instructions::interrupts::without_interrupts(|| {
                     handle_packet_(raw_paket, &udp_bindings, &mut arp_bindings);
                 });
             }
             HandlerMessage::Action(action) => {
-                println!("Got Action Message");
+                tracing::debug!("Action Message");
 
                 match action {
                     ActionRequest::SendArpRequest { ip, ret_queue } => {
@@ -97,7 +98,7 @@ pub async fn network_handler(
                         });
                     }
                     ActionRequest::PingRequest { waker, ip, mac } => {
-                        println!("Send Ping-Packet");
+                        tracing::info!("Send Ping");
 
                         // TODO
                     }

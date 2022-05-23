@@ -28,7 +28,7 @@ enum IDTStorage {
 
 impl IDTStorage {
     fn initial() -> Self {
-        Self::Initial(&InitialIDT)
+        Self::Initial(&INITIAL_IDT)
     }
 
     fn new(idt: Box<InterruptDescriptorTable>) -> Self {
@@ -77,7 +77,7 @@ impl Drop for IDTStorage {
 }
 
 lazy_static! {
-    static ref InitialIDT: InterruptDescriptorTable = {
+    static ref INITIAL_IDT: InterruptDescriptorTable = {
         let mut idt = InterruptDescriptorTable::new();
 
         idt.breakpoint.set_handler_fn(breakpoint_handler);

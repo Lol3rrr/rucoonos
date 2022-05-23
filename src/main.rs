@@ -7,10 +7,8 @@
 
 extern crate alloc;
 
-use core::alloc::LayoutErr;
 use core::panic::PanicInfo;
 
-use alloc::vec::Vec;
 use kernel::Kernel;
 use rucoonos::extensions::protocols;
 use rucoonos::*;
@@ -35,12 +33,18 @@ fn kernel_main(boot_info: &'static mut bootloader::BootInfo) -> ! {
     let hardware = rucoonos::Hardware::init(boot_info);
 
     let kernel = Kernel::setup(hardware);
+
+    // Setup tracing for the Kernel
+    let (subscriber, sub_process) = logging::serial(logging::LogLevel::Debug);
+    tracing::subscriber::set_global_default(subscriber);
+    kernel.handle().add_task(sub_process);
+
     kernel.add_extension(crate::extensions::NetworkExtension::new());
 
     if let Some(iter) = kernel.hardware().get_rsdt_entries() {
         for entry in iter {
             match entry {
-                acpi::acpi::AcipEntry::Apic(apic_entry) => {
+                acpi::acpi::AcipEntry::Apic(_) => {
                     println!(" -> Apic Entry");
                 }
                 acpi::acpi::AcipEntry::FADT { .. } => {
@@ -111,7 +115,7 @@ fn kernel_main(boot_info: &'static mut bootloader::BootInfo) -> ! {
                         .protocol(protocols::ipv4::Protocol::Udp)
                         .source([0, 0, 0, 0], meta.mac.clone())
                         .destination([255, 255, 255, 255], [0xff, 0xff, 0xff, 0xff, 0xff, 0xff]),
-                    |buffer| {
+                    |_| {
                         // TODO
                         Ok(0)
                     },
@@ -145,7 +149,7 @@ fn kernel_main(boot_info: &'static mut bootloader::BootInfo) -> ! {
 async fn ping(target_ip: [u8; 4]) {
     let kernel = hardware::KERNEL_INSTANCE.get().unwrap();
 
-    let mac = crate::extensions::get_mac(target_ip).await;
+    let mac = crate::extensions::get_mac(target_ip).await.expect("");
     println!("Own-Mac {:?}", mac);
 
     let raw_net_dev = kernel
