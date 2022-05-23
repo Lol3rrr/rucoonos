@@ -1,3 +1,5 @@
+use core::sync::atomic::AtomicBool;
+
 /// The Network extensions contains all the Logic for Networking.
 /// It consists of two Parts, the Interrupt-Handler and the Handler
 ///
@@ -25,7 +27,6 @@
 /// of listener or Callback
 use alloc::{boxed::Box, collections::BTreeMap, sync::Arc, vec::Vec};
 
-use kernel::Kernel;
 use x86_64::structures::idt::InterruptStackFrame;
 
 use crate::{
@@ -33,8 +34,7 @@ use crate::{
         self,
         device::{NetworkingDevice, PacketQueueSender},
     },
-    interrupts::{self, InterruptDoneGuard},
-    println, Hardware,
+    interrupts, println, Hardware,
 };
 
 mod api;
@@ -217,5 +217,7 @@ pub enum ActionRequest {
         ip: [u8; 4],
         /// The Mac-Address of the Target IP
         mac: [u8; 6],
+        /// This should be set to true if the Response was received
+        result: Arc<AtomicBool>,
     },
 }

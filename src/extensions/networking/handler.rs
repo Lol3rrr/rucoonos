@@ -13,6 +13,12 @@ use super::{
     HandlerMessage, RawPacket, DEVICES_, IPS,
 };
 
+struct Bindings<'m> {
+    udp: &'m mut BTreeMap<u16, nolock::queues::mpmc::bounded::scq::Sender<protocols::udp::Packet>>,
+    arp: &'m mut BTreeMap<[u8; 4], nolock::queues::spsc::bounded::AsyncBoundedSender<[u8; 6]>>,
+    ping: &'m mut BTreeMap<[u8; 4], (core::task::Waker, Arc<AtomicBool>)>,
+}
+
 /// This handler will actually properly handle all the Packets that were received by the Network Card
 #[tracing::instrument(name = "network_handler")]
 pub async fn network_handler(
@@ -48,12 +54,13 @@ pub async fn network_handler(
         nolock::queues::spsc::bounded::AsyncBoundedSender<[u8; 6]>,
     > = BTreeMap::new();
 
+    let mut ping_bindings: BTreeMap<[u8; 4], (core::task::Waker, Arc<AtomicBool>)> =
+        BTreeMap::new();
+
     // We loop forever because there can always be new packets
     // TODO
     // Probably add something to cancel this when the extension is "unloaded" (although not yet possible)
     loop {
-        tracing::debug!("Waiting...");
-
         // Get the Raw Packet information from the Queue
         let raw_message = match paket_recv.dequeue().await {
             Ok(p) => p,
@@ -68,7 +75,14 @@ pub async fn network_handler(
                 tracing::debug!("Raw-Packet");
 
                 x86_64::instructions::interrupts::without_interrupts(|| {
-                    handle_packet_(raw_paket, &udp_bindings, &mut arp_bindings);
+                    handle_packet_(
+                        raw_paket,
+                        Bindings {
+                            udp: &mut udp_bindings,
+                            arp: &mut arp_bindings,
+                            ping: &mut ping_bindings,
+                        },
+                    );
                 });
             }
             HandlerMessage::Action(action) => {
@@ -76,6 +90,8 @@ pub async fn network_handler(
 
                 match action {
                     ActionRequest::SendArpRequest { ip, ret_queue } => {
+                        tracing::debug!("Sending ARP");
+
                         arp_bindings.insert(ip, ret_queue);
 
                         x86_64::instructions::interrupts::without_interrupts(|| {
@@ -97,10 +113,42 @@ pub async fn network_handler(
                             }
                         });
                     }
-                    ActionRequest::PingRequest { waker, ip, mac } => {
+                    ActionRequest::PingRequest {
+                        waker,
+                        ip,
+                        mac,
+                        result,
+                    } => {
                         tracing::info!("Send Ping");
 
-                        // TODO
+                        ping_bindings.insert(ip.clone(), (waker, result));
+
+                        x86_64::instructions::interrupts::without_interrupts(|| {
+                            for device in DEVICES_.get().expect("").lock().iter() {
+                                let packet = protocols::icmp::PacketBuilder::new()
+                                    .set_type(protocols::icmp::Type::EchoRequest {
+                                        identifier: 0x1234,
+                                        sequence: 0x2345,
+                                    })
+                                    .finish(
+                                        protocols::ipv4::PacketBuilder::new()
+                                            .dscp(0)
+                                            .identification(0x1234)
+                                            .ttl(20)
+                                            .protocol(protocols::ipv4::Protocol::Icmp)
+                                            .source(
+                                                device.metadata.ip.unwrap_or([0, 0, 0, 0]),
+                                                device.metadata.mac,
+                                            )
+                                            .destination(ip, mac),
+                                        |_| Ok(0),
+                                        || 0,
+                                    )
+                                    .expect("");
+
+                                device.packet_queue.enqueue(packet);
+                            }
+                        });
                     }
                 };
             }
@@ -108,17 +156,7 @@ pub async fn network_handler(
     }
 }
 
-fn handle_packet_(
-    raw: RawPacket,
-    udp_bindings: &BTreeMap<
-        u16,
-        nolock::queues::mpmc::bounded::scq::Sender<protocols::udp::Packet>,
-    >,
-    arp_bindings: &mut BTreeMap<
-        [u8; 4],
-        nolock::queues::spsc::bounded::AsyncBoundedSender<[u8; 6]>,
-    >,
-) {
+fn handle_packet_(raw: RawPacket, mut bindings: Bindings<'_>) {
     let buffer = raw.buffer;
 
     let devices = DEVICES_.get().expect("");
@@ -164,8 +202,10 @@ fn handle_packet_(
                         .expect("")
                         .set(arp_packet.src_ip, arp_packet.src_mac);
 
-                    if let Some(mut listeners) = arp_bindings.remove(&arp_packet.src_ip) {
-                        listeners.enqueue(arp_packet.src_mac);
+                    tracing::debug!("Received ARP for {:?}", arp_packet.src_ip);
+
+                    if let Some(mut listeners) = bindings.arp.remove(&arp_packet.src_ip) {
+                        listeners.try_enqueue(arp_packet.src_mac).expect("");
                     }
                 }
                 arp::Operation::Unknown(unknown) => {
@@ -225,7 +265,13 @@ fn handle_packet_(
                             todo!("")
                         }
                         protocols::icmp::Type::EchoReply { .. } => {
-                            println!("Echo Reply");
+                            if let Some((waker, result)) = bindings
+                                .ping
+                                .remove(&icmp_packet.ipv4_packet().header().source_ip)
+                            {
+                                result.store(true, core::sync::atomic::Ordering::SeqCst);
+                                waker.wake();
+                            }
                         }
                         protocols::icmp::Type::Unknown(d) => {
                             println!("Unknown ICMP: {:?}", d);
@@ -293,7 +339,7 @@ fn handle_packet_(
                             }
                         };
                     } else {
-                        match udp_bindings.get(&udp_header.destination_port) {
+                        match bindings.udp.get(&udp_header.destination_port) {
                             Some(bind_queue) => {
                                 let _ = bind_queue.try_enqueue(udp_packet);
                             }

@@ -85,7 +85,10 @@ impl<H> Kernel<H> {
         loop {
             let run_id = match self.queue.recv.dequeue() {
                 Some(e) => e,
-                None => return,
+                None => {
+                    tracing::error!("Queue was closed");
+                    return;
+                }
             };
 
             while let Ok(n_task) = self.task_add_queue.try_dequeue() {
@@ -94,7 +97,10 @@ impl<H> Kernel<H> {
 
             let entry = match self.tasks.iter_mut().find(|task| task.id == run_id) {
                 Some(e) => e,
-                None => continue,
+                None => {
+                    tracing::error!("Task no longer available: {:?}", run_id);
+                    continue;
+                }
             };
 
             match entry.run(&self.queue_sender) {

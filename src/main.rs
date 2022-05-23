@@ -129,8 +129,8 @@ fn kernel_main(boot_info: &'static mut bootloader::BootInfo) -> ! {
     #[cfg(not(test))]
     {
         let k_handle = kernel.handle();
-        k_handle.add_task(tetris());
-        k_handle.add_task(ping([134, 61, 188, 161]));
+        // k_handle.add_task(tetris());
+        k_handle.add_task(ping([192, 168, 178, 20]));
 
         /*
         if let Some(udp_listen) = udp_listen {
@@ -151,38 +151,13 @@ async fn ping(target_ip: [u8; 4]) {
     let kernel = hardware::Hardware::try_get().unwrap();
 
     let mac = crate::extensions::get_mac(target_ip).await.expect("");
-    println!("Own-Mac {:?}", mac);
+    tracing::info!("Target-Mac {:?}", mac);
 
-    let raw_net_dev = kernel
-        .find_device_handle(|dev| match dev {
-            hardware::device::Device::Network(_) => true,
-            _ => false,
-        })
-        .unwrap();
-    let net_dev = match raw_net_dev {
-        hardware::device::DeviceHandle::Network(n) => n,
-        _ => unreachable!(),
-    };
+    loop {
+        crate::extensions::raw_ping(target_ip, mac).await;
 
-    net_dev.p_queue.enqueue(
-        protocols::icmp::PacketBuilder::new()
-            .set_type(protocols::icmp::Type::EchoRequest {
-                identifier: 123,
-                sequence: 224,
-            })
-            .finish(
-                protocols::ipv4::PacketBuilder::new()
-                    .dscp(0)
-                    .identification(123)
-                    .ttl(20)
-                    .protocol(protocols::ipv4::Protocol::Icmp)
-                    .source(net_dev.ip.unwrap(), net_dev.mac)
-                    .destination(target_ip, mac),
-                |_| Ok(0),
-                || 0,
-            )
-            .unwrap(),
-    )
+        tracing::info!("Received Ping");
+    }
 }
 
 /*
