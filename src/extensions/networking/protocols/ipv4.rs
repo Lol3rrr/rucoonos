@@ -1,8 +1,10 @@
 use super::ethernet;
 
+/// A Wrapper to simplify the interaction with IPv4-Addresses
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Address([u8; 4]);
 
+/// The Type of the Address, so whether it is LAN, WAN, or Loopback
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum AddressType {
     Lan,
@@ -22,6 +24,7 @@ impl Into<[u8; 4]> for Address {
 }
 
 impl Address {
+    /// Get the Address-Type of the current Address
     pub fn address_ty(&self) -> AddressType {
         match (self.0[0], self.0[1], self.0[2]) {
             (127, _, _) => AddressType::Loopback,
@@ -35,6 +38,7 @@ pub struct Packet {
     eth_packet: ethernet::Packet,
 }
 
+/// The Protocol contained in the Packet
 #[derive(Debug, Clone, Copy)]
 pub enum Protocol {
     Icmp,
@@ -82,6 +86,7 @@ pub struct PacketHeader {
 }
 
 impl PacketHeader {
+    /// Calculates the Checksum for the Header and returns a Header with the Checksum set to the correct value
     pub fn set_checksum(mut self) -> Self {
         self.header_checksum = 0;
 
@@ -103,6 +108,7 @@ impl PacketHeader {
         self
     }
 
+    /// Write the Header to the provided Buffer
     pub fn to_bytes(&self, target: &mut [u8]) -> Result<(), ()> {
         if target.len() < 20 {
             return Err(());
@@ -125,10 +131,12 @@ impl PacketHeader {
 }
 
 impl Packet {
+    /// Create an IPv4 Packet from an ethernet Packet
     pub fn new(raw: ethernet::Packet) -> Self {
         Self { eth_packet: raw }
     }
 
+    /// Load the Header of the Packet
     pub fn header(&self) -> PacketHeader {
         let raw_data = self.eth_packet.content();
         let ihl = (raw_data[0] & 0x0f) as usize;
@@ -153,10 +161,12 @@ impl Packet {
         }
     }
 
+    /// Get the underlying ethernet Packet
     pub fn eth(&self) -> &ethernet::Packet {
         &self.eth_packet
     }
 
+    /// Get the Payload of the Packet
     pub fn payload(&self) -> &[u8] {
         let raw_data = self.eth_packet.content();
         let ihl = (raw_data[0] & 0x0f) as usize;

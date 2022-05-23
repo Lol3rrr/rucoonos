@@ -36,7 +36,8 @@ fn kernel_main(boot_info: &'static mut bootloader::BootInfo) -> ! {
 
     // Setup tracing for the Kernel
     let (subscriber, sub_process) = logging::serial(logging::LogLevel::Debug);
-    tracing::subscriber::set_global_default(subscriber);
+    tracing::subscriber::set_global_default(subscriber)
+        .expect("Registering the Logger should always work");
     kernel.handle().add_task(sub_process);
 
     kernel.add_extension(crate::extensions::NetworkExtension::new());
@@ -129,7 +130,7 @@ fn kernel_main(boot_info: &'static mut bootloader::BootInfo) -> ! {
     {
         let k_handle = kernel.handle();
         k_handle.add_task(tetris());
-        k_handle.add_task(ping([192, 168, 1, 140]));
+        k_handle.add_task(ping([134, 61, 188, 161]));
 
         /*
         if let Some(udp_listen) = udp_listen {
@@ -200,8 +201,9 @@ async fn udp_listener(udp_listener: hardware::api::networking::UDPListener) {
 }
 */
 
+#[tracing::instrument(name = "tetris")]
 async fn tetris() {
-    println!("Starting Tetris");
+    tracing::info!("Starting Tetris");
 
     let y_steps = 5;
     let color_steps = 2;

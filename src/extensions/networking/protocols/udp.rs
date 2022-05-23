@@ -4,11 +4,16 @@ pub struct Packet {
     ip_packet: ipv4::Packet,
 }
 
+/// The Header of an UDP-Packet
 #[derive(Debug)]
 pub struct PacketHeader {
+    /// The Source-Port
     pub source_port: u16,
+    /// The Destination-Port
     pub destination_port: u16,
+    /// The Length of the Data
     length: u16,
+    /// The Checksum
     checksum: u16,
 }
 
@@ -21,15 +26,35 @@ impl TryFrom<&[u8]> for PacketHeader {
         }
 
         Ok(Self {
-            source_port: u16::from_be_bytes(value[0..2].try_into().unwrap()),
-            destination_port: u16::from_be_bytes(value[2..4].try_into().unwrap()),
-            length: u16::from_be_bytes(value[4..6].try_into().unwrap()),
-            checksum: u16::from_be_bytes(value[6..8].try_into().unwrap()),
+            source_port: u16::from_be_bytes(
+                value[0..2]
+                    .try_into()
+                    .expect("We know that there are enough Bytes"),
+            ),
+            destination_port: u16::from_be_bytes(
+                value[2..4]
+                    .try_into()
+                    .expect("We know that there are enough Bytes"),
+            ),
+            length: u16::from_be_bytes(
+                value[4..6]
+                    .try_into()
+                    .expect("We know that there are enough Bytes"),
+            ),
+            checksum: u16::from_be_bytes(
+                value[6..8]
+                    .try_into()
+                    .expect("We know that there are enough Bytes"),
+            ),
         })
     }
 }
 
 impl PacketHeader {
+    /// Writes the Header into the given Buffer
+    ///
+    /// # Errors
+    /// * if the Buffers length is < 8
     pub fn to_bytes(&self, buffer: &mut [u8]) -> Result<(), ()> {
         if buffer.len() < 8 {
             return Err(());
@@ -45,18 +70,22 @@ impl PacketHeader {
 }
 
 impl Packet {
+    /// Creates a new Packet from the underlying IPv4 Packet
     pub fn new(packet: ipv4::Packet) -> Self {
         Self { ip_packet: packet }
     }
 
+    /// Load the Header from the current Packet
     pub fn header(&self) -> PacketHeader {
         (&self.ip_packet.payload()[0..8]).try_into().unwrap()
     }
 
+    /// Load the Payload of the Packet
     pub fn payload(&self) -> &[u8] {
         &(self.ip_packet.payload())[8..]
     }
 
+    /// Get the underlying IPv4 Packet
     pub fn ip_packet(&self) -> &ipv4::Packet {
         &self.ip_packet
     }
@@ -82,6 +111,7 @@ impl PacketBuilder<InitialState> {
         }
     }
 
+    /// Set the Source Port
     pub fn source_port(self, port: u16) -> PacketBuilder<SourcePort> {
         PacketBuilder {
             state: SourcePort { source_port: port },
@@ -89,6 +119,7 @@ impl PacketBuilder<InitialState> {
     }
 }
 impl PacketBuilder<SourcePort> {
+    /// Set the Destination Port
     pub fn destination_port(self, port: u16) -> PacketBuilder<DestinationPort> {
         PacketBuilder {
             state: DestinationPort {
@@ -99,6 +130,12 @@ impl PacketBuilder<SourcePort> {
     }
 }
 impl PacketBuilder<DestinationPort> {
+    /// Finish up the Packet construction
+    ///
+    /// # Arguments
+    /// * `ip_packet_builder`: The Builder to construct the underlying IPv4 Packet
+    /// * `payload`: The closure should write the Payload into the provided Buffer
+    /// * `payload_size`: Returns the size of the Payload
     pub fn finish<P, S>(
         self,
         ip_packet_builder: ipv4::PacketBuilder<ipv4::DestinationState>,

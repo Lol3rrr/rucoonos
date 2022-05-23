@@ -10,7 +10,6 @@
 //
 #![feature(const_mut_refs)]
 #![feature(const_ptr_write)]
-#![feature(const_ptr_offset)]
 #![feature(const_maybe_uninit_as_mut_ptr)]
 // Some Lints used for better style
 #![allow(missing_docs)]

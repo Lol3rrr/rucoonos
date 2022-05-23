@@ -101,11 +101,6 @@ lazy_static! {
 pub fn init_idt() {
     IDT.read().load();
 
-    // Simply allow ALL the Interrupts
-    unsafe {
-        PICS.lock().write_masks(0x00, 0x00);
-    }
-
     unsafe {
         timer::configure_pit();
     }
@@ -121,6 +116,24 @@ pub unsafe fn set_interrupt(line: usize, entry: HandlerFunc) {
         let old_idt: IDTStorage = core::mem::replace(&mut writer, IDTStorage::new(Box::new(n_idt)));
 
         writer.load();
+
+        // Set the Mask-Bit for the interrupt line correctly
+        let mut pic = unsafe { PICS.lock() };
+        let mut prev_mask = unsafe { pic.read_masks() };
+
+        let irq_line = line - PIC_1_OFFSET as usize;
+        if irq_line < 8 {
+            prev_mask[0] &= !(1 << irq_line);
+        } else if irq_line < 16 {
+            prev_mask[1] &= !(1 << (irq_line - 8));
+        } else {
+            // TODO
+            // Invalid line
+        }
+
+        unsafe {
+            pic.write_masks(prev_mask[0], prev_mask[1]);
+        }
 
         drop(old_idt);
     });

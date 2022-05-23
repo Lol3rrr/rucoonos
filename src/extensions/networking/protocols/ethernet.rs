@@ -4,12 +4,18 @@ pub struct Packet {
     buffer: Buffer,
 }
 
+/// The Type of Packet contained in the Ethernet Packet
 #[derive(Debug)]
 pub enum EthType {
+    /// It contains an IPv4 Packet
     Ipv4,
+    /// It contains an IPv6 Packet
     Ipv6,
+    /// It contains an ARP Packet
     Arp,
+    /// It contains a WakeOnLan magic Packet
     WakeOnLan,
+    /// It contains an unknown or currently unsupported Packet
     Unknown([u8; 2]),
 }
 
@@ -41,22 +47,27 @@ impl Packet {
         Self { buffer }
     }
 
+    /// The MAC-Address of the Destination
     pub fn destination_mac(&self) -> [u8; 6] {
         self.buffer.as_ref()[0..6].try_into().unwrap()
     }
+    /// The MAC-Address of the Source
     pub fn source_mac(&self) -> [u8; 6] {
         self.buffer.as_ref()[6..12].try_into().unwrap()
     }
 
+    /// The Type of Packet contained
     pub fn ether_type(&self) -> EthType {
         let bytes: [u8; 2] = self.buffer.as_ref()[12..14].try_into().unwrap();
         bytes.into()
     }
 
+    /// The inner Content of the ethernet Packet
     pub fn content(&self) -> &[u8] {
         &self.buffer.as_ref()[14..(self.buffer.len())]
     }
 
+    /// Turns the Packet back into a Buffer
     pub fn into_buffer(self) -> Buffer {
         self.buffer
     }
@@ -81,12 +92,14 @@ pub struct PacketBuilder<S> {
 }
 
 impl PacketBuilder<InitialState> {
+    /// Create the empty Packet Builder
     pub fn new() -> Self {
         Self {
             state: InitialState {},
         }
     }
 
+    /// Set the Source MAC-Address of the Ethernet Packet
     pub fn source(self, mac: [u8; 6]) -> PacketBuilder<SourceState> {
         PacketBuilder {
             state: SourceState { source: mac },
@@ -94,6 +107,7 @@ impl PacketBuilder<InitialState> {
     }
 }
 impl PacketBuilder<SourceState> {
+    /// Set the Destination MAC-Address of the Ethernet Packet
     pub fn destination(self, mac: [u8; 6]) -> PacketBuilder<DestinationState> {
         PacketBuilder {
             state: DestinationState {
@@ -104,6 +118,7 @@ impl PacketBuilder<SourceState> {
     }
 }
 impl PacketBuilder<DestinationState> {
+    /// Set the Type of Packet Contained in the Ethernet Packet
     pub fn ether_ty<T>(self, ty: T) -> PacketBuilder<EtherTypeState>
     where
         T: Into<[u8; 2]>,
@@ -118,6 +133,10 @@ impl PacketBuilder<DestinationState> {
     }
 }
 impl PacketBuilder<EtherTypeState> {
+    /// Finish building the Packet and fill the buffer by running the provided Closure
+    ///
+    /// # Arguments
+    /// * payload: A closure that receives a Buffer of (1500 - 14) Bytes into which it should write its data
     pub fn finish<F>(self, payload: F) -> Result<Packet, ()>
     where
         F: FnOnce(&mut [u8]) -> Result<usize, ()>,

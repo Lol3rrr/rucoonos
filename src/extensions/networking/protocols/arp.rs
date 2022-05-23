@@ -13,10 +13,15 @@ pub struct Packet {
     eth_packet: ethernet::Packet,
 }
 
+/// The Operations that an ARP Packet can "perform"/represent
 #[derive(Debug)]
 pub enum Operation {
+    /// It is looking for the Mac-Address of the Destination IP
     Request,
+    /// This is send by the Target Machine in response, to notify the requester that we are the
+    /// corresponding machine
     Response,
+    /// An unknown ARP Operation, which could represent an invalid Operation or an unsupported Operation
     Unknown(u16),
 }
 
@@ -40,6 +45,10 @@ impl Into<u16> for Operation {
 }
 
 impl Packet {
+    /// Attempt to parse the ethernet Packet as an ArpPacket
+    ///
+    /// # Failure
+    /// This will fail if the Ethernet Packet has not enough content to actually hold the Packet
     pub fn new(eth: ethernet::Packet) -> Result<Self, ()> {
         let content = eth.content();
         if content.len() < 28 {
@@ -70,10 +79,12 @@ impl Packet {
         })
     }
 
+    /// Get the Operation of the given ARP Packet
     pub fn operation(&self) -> Operation {
         self.operation.into()
     }
 
+    /// Get the Destination IP of the ARP Packet
     pub fn dest_ip(&self) -> &[u8; 4] {
         &self.dest_ip
     }
@@ -99,12 +110,14 @@ pub struct PacketBuilder<S> {
 }
 
 impl PacketBuilder<InitialState> {
+    /// An empty Packet Builder with no information stored
     pub fn new() -> Self {
         Self {
             state: InitialState {},
         }
     }
 
+    /// Set the Sender related information, it's IP and MAC-Addresss
     pub fn sender(self, mac: [u8; 6], ip: [u8; 4]) -> PacketBuilder<SenderState> {
         PacketBuilder {
             state: SenderState { mac, ip },
@@ -112,6 +125,7 @@ impl PacketBuilder<InitialState> {
     }
 }
 impl PacketBuilder<SenderState> {
+    /// Set the Destination related information, it's IP and MAC-Address
     pub fn destination(self, mac: [u8; 6], ip: [u8; 4]) -> PacketBuilder<DestinationState> {
         PacketBuilder {
             state: DestinationState {
@@ -123,6 +137,7 @@ impl PacketBuilder<SenderState> {
     }
 }
 impl PacketBuilder<DestinationState> {
+    /// Set the correct Operation for the Packet
     pub fn operation(self, operation: Operation) -> PacketBuilder<OperationState> {
         PacketBuilder {
             state: OperationState {
@@ -133,6 +148,7 @@ impl PacketBuilder<DestinationState> {
     }
 }
 impl PacketBuilder<OperationState> {
+    /// Finish the Packet-Builder and return the final ethernet Packet to send out
     pub fn finish(self) -> Result<ethernet::Packet, ()> {
         ethernet::PacketBuilder::new()
             .source(self.state.destination.sender.mac.clone())
