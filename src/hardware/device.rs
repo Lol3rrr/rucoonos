@@ -119,33 +119,6 @@ impl E1000Driver {
     }
 }
 
-impl NetworkDevice {
-    pub fn blocking_init(&mut self) -> Result<impl FnOnce(), ()> {
-        if self.metadata.ip.is_some() {
-            return Err(());
-        }
-
-        let indicator = Arc::new(AtomicBool::new(false));
-
-        let tx_id = 0x12345678;
-        self.metadata.dhcp = DHCPExchange::Discover {
-            indicator: indicator.clone(),
-            transaction_id: tx_id,
-        };
-
-        self.packet_queue
-            .enqueue(protocols::dhcp::discover_message(self.metadata.mac.clone(), tx_id).unwrap());
-
-        Ok(move || loop {
-            if indicator.load(Ordering::SeqCst) {
-                return;
-            }
-
-            x86_64::instructions::hlt();
-        })
-    }
-}
-
 #[derive(Clone)]
 pub struct PacketQueueSender {
     queue: Arc<nolock::queues::mpsc::jiffy::Sender<crate::extensions::protocols::ethernet::Packet>>,

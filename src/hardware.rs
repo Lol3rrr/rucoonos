@@ -13,9 +13,9 @@ use rucoon::runtime::{AddTaskError, RunError, TaskID};
 use x86_64::{structures::paging::OffsetPageTable, VirtAddr};
 
 mod allocator;
-pub mod api;
 pub mod device;
 mod pci;
+mod rng;
 
 static MEMORY_MAPPING: spin::Once<OffsetPageTable> = spin::Once::new();
 
@@ -26,8 +26,9 @@ pub struct Hardware {
     /// The parsed out RSDT
     rsdt: Option<(RSDT<OffsetMapper>, OffsetMapper)>,
     /// A list of all loaded Devices
-    pub(crate) devices: spin::Mutex<Vec<device::Device>>,
     memory_offset: Option<u64>,
+    devices: spin::Mutex<Vec<device::Device>>,
+    rng: spin::Mutex<rng::Kiss>,
 }
 
 impl Hardware {
@@ -156,6 +157,9 @@ impl Hardware {
             rsdt,
             devices: spin::Mutex::new(devices),
             memory_offset: boot_info.physical_memory_offset.into(),
+            rng: spin::Mutex::new(
+                rng::Kiss::new(239812446, 1837621879, 512893, 123873267123).unwrap(),
+            ),
         };
         KERNEL_INSTANCE.call_once(|| instance)
     }
@@ -221,5 +225,9 @@ impl Hardware {
 
             Some(apply(found_device))
         })
+    }
+
+    pub fn get_rand(&self) -> u64 {
+        x86_64::instructions::interrupts::without_interrupts(|| self.rng.lock().rand())
     }
 }

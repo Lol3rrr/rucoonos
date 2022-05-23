@@ -90,16 +90,20 @@ impl Packet {
     pub fn get(&self) -> Data {
         self.datagram.payload().try_into().unwrap()
     }
+
+    pub fn udp_datagram(&self) -> &udp::Packet {
+        &self.datagram
+    }
 }
 
-pub fn discover_message(own_mac: [u8; 6], xid: u32) -> Result<ethernet::Packet, ()> {
+pub fn discover_message(own_mac: [u8; 6], xid: u32, ip_ident: u16) -> Result<ethernet::Packet, ()> {
     udp::PacketBuilder::new()
         .source_port(68)
         .destination_port(67)
         .finish(
             ipv4::PacketBuilder::new()
                 .dscp(0)
-                .identification(0x1234)
+                .identification(ip_ident)
                 .ttl(20)
                 .protocol(ipv4::Protocol::Udp)
                 .source([0, 0, 0, 0], own_mac.clone())
@@ -139,6 +143,7 @@ pub fn request_message(
     xid: u32,
     ip: [u8; 4],
     server_ip: [u8; 4],
+    ip_ident: u16,
 ) -> Result<ethernet::Packet, ()> {
     udp::PacketBuilder::new()
         .source_port(68)
@@ -146,7 +151,7 @@ pub fn request_message(
         .finish(
             ipv4::PacketBuilder::new()
                 .dscp(0)
-                .identification(0x1234)
+                .identification(ip_ident)
                 .ttl(20)
                 .protocol(ipv4::Protocol::Udp)
                 .source([0, 0, 0, 0], own_mac.clone())

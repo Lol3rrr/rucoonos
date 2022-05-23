@@ -29,7 +29,7 @@ pub async fn network_handler(
             };
 
             device.packet_queue.enqueue(
-                protocols::dhcp::discover_message(device.metadata.mac.clone(), tx_id).unwrap(),
+                protocols::dhcp::discover_message(device.metadata.mac.clone(), tx_id, 13).unwrap(),
             );
         }
     });
@@ -51,6 +51,8 @@ pub async fn network_handler(
     // TODO
     // Probably add something to cancel this when the extension is "unloaded" (although not yet possible)
     loop {
+        println!("[Network-Handler] Waiting...");
+
         // Get the Raw Packet information from the Queue
         let raw_message = match paket_recv.dequeue().await {
             Ok(p) => p,
@@ -257,6 +259,7 @@ fn handle_packet_(
                                         transaction_id,
                                         offered_ip.clone(),
                                         server_ip.clone(),
+                                        0,
                                     )
                                     .unwrap(),
                                 );

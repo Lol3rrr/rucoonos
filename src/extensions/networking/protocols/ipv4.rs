@@ -1,5 +1,36 @@
 use super::ethernet;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Address([u8; 4]);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum AddressType {
+    Lan,
+    Wan,
+    Loopback,
+}
+
+impl From<[u8; 4]> for Address {
+    fn from(raw: [u8; 4]) -> Self {
+        Self(raw)
+    }
+}
+impl Into<[u8; 4]> for Address {
+    fn into(self) -> [u8; 4] {
+        self.0
+    }
+}
+
+impl Address {
+    pub fn address_ty(&self) -> AddressType {
+        match (self.0[0], self.0[1], self.0[2]) {
+            (127, _, _) => AddressType::Loopback,
+            (10, _, _) | (192, 0, 0) | (192, 168, _) => AddressType::Lan,
+            _ => AddressType::Wan,
+        }
+    }
+}
+
 pub struct Packet {
     eth_packet: ethernet::Packet,
 }

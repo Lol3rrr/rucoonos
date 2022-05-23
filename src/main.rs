@@ -60,6 +60,7 @@ fn kernel_main(boot_info: &'static mut bootloader::BootInfo) -> ! {
     }
 
     if false {
+        /*
         let mut tmp = Vec::new();
         kernel.hardware().with_networking_device(|dev| {
             let func = dev.blocking_init().unwrap();
@@ -69,8 +70,10 @@ fn kernel_main(boot_info: &'static mut bootloader::BootInfo) -> ! {
         for init in tmp {
             init();
         }
+        */
     }
 
+    /*
     let udp_listen = kernel.hardware().find_apply_device(
         |dev| match dev {
             hardware::device::Device::Network(n_dev) => true,
@@ -87,6 +90,7 @@ fn kernel_main(boot_info: &'static mut bootloader::BootInfo) -> ! {
             hardware::api::networking::UDPListener::bind(8080, &n_dev).unwrap()
         },
     );
+    */
 
     kernel.hardware().with_networking_device(|device| {
         let sender = &device.packet_queue;
@@ -122,9 +126,12 @@ fn kernel_main(boot_info: &'static mut bootloader::BootInfo) -> ! {
         let k_handle = kernel.handle();
         k_handle.add_task(tetris());
         k_handle.add_task(ping([192, 168, 1, 140]));
+
+        /*
         if let Some(udp_listen) = udp_listen {
             k_handle.add_task(udp_listener(udp_listen));
         }
+        */
 
         kernel.run();
     }
@@ -173,6 +180,7 @@ async fn ping(target_ip: [u8; 4]) {
     )
 }
 
+/*
 async fn udp_listener(udp_listener: hardware::api::networking::UDPListener) {
     loop {
         let packet = match udp_listener.a_recv().await {
@@ -186,6 +194,7 @@ async fn udp_listener(udp_listener: hardware::api::networking::UDPListener) {
         println!("Received-UDP-Packet: {:?}", packet.header());
     }
 }
+*/
 
 async fn tetris() {
     println!("Starting Tetris");

@@ -1,5 +1,3 @@
-use crate::println;
-
 // https://wiki.osdev.org/PCI#Enumerating_PCI_Buses
 
 const PCI_COMMAND: u8 = 0x4;
@@ -115,10 +113,9 @@ impl From<u32> for BaseAddressRegister {
                     ty: raw_ty as u8,
                 }
             }
-            1 => {
-                println!("IO Address");
-                Self::IOSpace { address: 0 }
-            }
+            1 => Self::IOSpace {
+                address: raw & 0xfffffffc,
+            },
             _ => unreachable!(""),
         }
     }
@@ -140,19 +137,19 @@ pub enum HeaderType {
 pub enum DeviceClass {
     NetworkController(NetworkContollerClass),
     DisplayController(DisplayControllerClass),
-    Unknown { class: u16, subclass: u16 },
+    Unknown { class: u8, subclass: u8 },
 }
 
 #[derive(Debug)]
 pub enum NetworkContollerClass {
     Ethernet,
-    Unknown { subclass: u16 },
+    Unknown { subclass: u8 },
 }
 
 #[derive(Debug)]
 pub enum DisplayControllerClass {
     VGACompatible {},
-    Unknown { subclass: u16 },
+    Unknown { subclass: u8 },
 }
 
 fn load_device(bus: u8, device: u8) -> Option<Device> {
@@ -165,16 +162,30 @@ fn load_device(bus: u8, device: u8) -> Option<Device> {
 
     let device_id = read_word(bus, device, function, 0x2);
 
+    // Structure
+    // Status | Command
+    // 16-bit | 16-bit
     let second_row = read_32bit(bus, device, function, 0x4);
+    let status = (second_row >> 16) as u16;
+    let command = (second_row & 0x0000ffff) as u16;
 
-    let baseclass = (read_word(bus, device, function, 0xa) & 0xff00) >> 8;
-    let subclass = read_word(bus, device, function, 0xa) & 0x00ff;
+    // Structure
+    // Class-Code | Sub-Class | Prog-IF | Revision-ID
+    // 8-bit      | 8-bit     | 8-bit   | 8-bit
+    let third_line = read_32bit(bus, device, function, 0x8);
+    let baseclass = (third_line >> 24) as u8;
+    let subclass = ((third_line >> 16) & 0x000000ff) as u8;
+    let prog_if = ((third_line >> 8) & 0x000000ff) as u8;
+    let revision_id = (third_line & 0x000000ff) as u8;
 
-    let prog_if = (read_word(bus, device, function, 0x8) & 0xff00) >> 8;
-    let revision_id = (read_word(bus, device, function, 0x8) & 0x00ff) as u8;
-
-    let bist = ((read_word(bus, device, function, 0xE) & 0xff00) >> 8) as u8;
-    let raw_header_type = (read_word(bus, device, function, 0xE) & 0x00ff) as u8;
+    // Structure
+    // BIST  | HeaderType | LatencyTimer | CacheLineSize
+    // 8-bit | 8-bit      | 8-bit        | 8-bit
+    let fourth_line = read_32bit(bus, device, function, 0xc);
+    let bist = (fourth_line >> 24) as u8;
+    let raw_header_type = ((fourth_line >> 16) & 0x000000ff) as u8;
+    let latency_timer = ((fourth_line >> 8) & 0x000000ff) as u8;
+    let cache_line_size = (fourth_line & 0x000000ff) as u8;
 
     let class = match (baseclass, subclass) {
         (0x2, sub) => {
@@ -189,7 +200,6 @@ fn load_device(bus: u8, device: u8) -> Option<Device> {
                 0x0 => DisplayControllerClass::VGACompatible {},
                 s => DisplayControllerClass::Unknown { subclass: s },
             };
-            println!("PROG_IF: 0x{:x}", prog_if);
             DeviceClass::DisplayController(display_class)
         }
         (b, s) => DeviceClass::Unknown {
@@ -228,13 +238,13 @@ fn load_device(bus: u8, device: u8) -> Option<Device> {
         generic: GenericHeader {
             id: device_id,
             vendor_id: vendorid,
-            status: 0,
-            command: 0,
+            status,
+            command,
             class,
             revision_id,
             bist,
-            latency_timer: 0,
-            cache_line_size: 0,
+            latency_timer,
+            cache_line_size,
         },
         header_type,
     })

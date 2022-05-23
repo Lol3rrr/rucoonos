@@ -63,12 +63,12 @@ pub extern "x86-interrupt" fn keyboard_interrupt_handler(_stack_frame: Interrupt
         49 => Some('y'),
         50 => Some('y'),
         code => {
-            println!("Unknown Code: {:?}", code);
+            // println!("Unknown Code: {:?}", code);
             None
         }
     };
     if let Some(key) = key {
-        println!("{} {}", key, down);
+        // println!("{} {}", key, down);
     }
 
     unsafe {
