@@ -16,6 +16,7 @@ use crate::println;
 mod level;
 pub use level::LogLevel;
 
+#[derive(Debug)]
 enum SubscriberMessage {
     NewSpan {
         id: tracing::span::Id,
@@ -42,7 +43,7 @@ struct Visitor<'s> {
 impl<'s> tracing::field::Visit for Visitor<'s> {
     fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn alloc::fmt::Debug) {
         if field.name() == "message" {
-            write!(self.content, "{:?}", value);
+            let _ = write!(self.content, "{:?}", value);
         }
     }
 }
@@ -56,10 +57,12 @@ impl tracing::Subscriber for SerialSubscriber {
     fn new_span(&self, span: &tracing::span::Attributes<'_>) -> tracing::span::Id {
         let id = tracing::span::Id::from_u64(self.id_counter.fetch_add(1, Ordering::SeqCst));
         let name = span.metadata().name();
-        self.writer.enqueue(SubscriberMessage::NewSpan {
-            id: id.clone(),
-            name,
-        });
+        self.writer
+            .enqueue(SubscriberMessage::NewSpan {
+                id: id.clone(),
+                name,
+            })
+            .expect("The Queue should always work");
         id
     }
 
@@ -75,18 +78,24 @@ impl tracing::Subscriber for SerialSubscriber {
 
         event.record(&mut visitor);
 
-        self.writer.enqueue(SubscriberMessage::Event {
-            content,
-            level: event.metadata().level().into(),
-        });
+        self.writer
+            .enqueue(SubscriberMessage::Event {
+                content,
+                level: event.metadata().level().into(),
+            })
+            .expect("The Queue should always work");
     }
 
     fn enter(&self, span: &tracing::span::Id) {
-        self.writer.enqueue(SubscriberMessage::Enter(span.clone()));
+        self.writer
+            .enqueue(SubscriberMessage::Enter(span.clone()))
+            .expect("The Queue should always work");
     }
 
     fn exit(&self, span: &tracing::span::Id) {
-        self.writer.enqueue(SubscriberMessage::Exit(span.clone()));
+        self.writer
+            .enqueue(SubscriberMessage::Exit(span.clone()))
+            .expect("The Queue should always work");
     }
 }
 
