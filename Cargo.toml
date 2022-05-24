@@ -9,6 +9,7 @@ edition = "2021"
 members = [
     "boot",
     "kernel",
+    "wasm-interpret",
 ]
 
 [dependencies]
