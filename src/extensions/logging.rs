@@ -28,6 +28,7 @@ use core::{
 };
 
 use alloc::{boxed::Box, collections::BTreeMap, string::String, vec::Vec};
+use kernel::Kernel;
 
 use crate::println;
 
@@ -44,7 +45,11 @@ impl LogExtension {
     }
 }
 impl<H> kernel::Extension<H> for LogExtension {
-    fn setup(self, hardware: &H) -> core::pin::Pin<alloc::boxed::Box<dyn Future<Output = ()>>> {
+    fn setup(
+        self,
+        _kernel: &Kernel<H>,
+        hardware: &H,
+    ) -> core::pin::Pin<alloc::boxed::Box<dyn Future<Output = ()>>> {
         let (sub, task) = serial(self.level);
 
         tracing::subscriber::set_global_default(sub)
@@ -68,7 +73,7 @@ enum SubscriberMessage {
     },
 }
 
-pub struct SerialSubscriber {
+struct SerialSubscriber {
     writer: nolock::queues::mpsc::jiffy::AsyncSender<SubscriberMessage>,
     id_counter: AtomicU64,
     level: LogLevel,

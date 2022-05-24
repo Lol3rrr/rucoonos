@@ -16,7 +16,7 @@ pub use handle::Handle;
 /// Extensions allow you to add custom parts to the Kernel to enable new Things, like networking
 pub trait Extension<H> {
     /// Setups the Extension and the returned Future
-    fn setup(self, hardware: &H) -> Pin<Box<dyn Future<Output = ()>>>;
+    fn setup(self, kernel: &Kernel<H>, hardware: &H) -> Pin<Box<dyn Future<Output = ()>>>;
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -73,7 +73,7 @@ impl<H> Kernel<H> {
     where
         E: Extension<H>,
     {
-        let ext_task = extension.setup(&self.hardware);
+        let ext_task = extension.setup(self, &self.hardware);
         self.handle.add_raw_task(ext_task);
     }
 

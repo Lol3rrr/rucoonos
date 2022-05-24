@@ -1,11 +1,21 @@
 use core::fmt::Display;
 
+/// The Level at which the Logs should actually be printed
+///
+/// This allows for as detailed of a log as you need, depending on your use-case
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum LogLevel {
-    Debug,
+    /// The most verbose Level, which will output everything
     Trace,
+    /// This does not output as much as Trace but still outputs a lot of information, especially
+    /// useful for getting started with debugging
+    Debug,
+    /// Outputs some information about the system to allow you to follow its behaviour in a broader
+    /// sense
     Info,
+    /// Only logs warnings or errors generated
     Warn,
+    /// Only logs errors generated
     Error,
 }
 

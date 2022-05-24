@@ -27,6 +27,7 @@ use core::sync::atomic::AtomicBool;
 /// of listener or Callback
 use alloc::{boxed::Box, collections::BTreeMap, sync::Arc, vec::Vec};
 
+use kernel::Kernel;
 use x86_64::structures::idt::InterruptStackFrame;
 
 use crate::{
@@ -67,6 +68,7 @@ impl NetworkExtension {
 impl kernel::Extension<&Hardware> for NetworkExtension {
     fn setup(
         self,
+        _kernel: &Kernel<&Hardware>,
         hardware: &&Hardware,
     ) -> core::pin::Pin<alloc::boxed::Box<dyn core::future::Future<Output = ()>>> {
         println!("Setting up Networking Extension");
