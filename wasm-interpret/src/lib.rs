@@ -1,56 +1,16 @@
+#![cfg_attr(not(test), no_std)]
+extern crate alloc;
+
+use alloc::vec::Vec;
+
 // https://webassembly.github.io/spec/core/binary/modules.html#binary-typesec
+
+mod leb128;
+use leb128::{parse_ileb128, parse_uleb128};
 
 #[derive(Debug)]
 pub struct Module {
     sections: Vec<Section>,
-}
-
-fn parse_uleb128<I>(mut bytes: I) -> Option<u32>
-where
-    I: Iterator<Item = u8>,
-{
-    let mut result = 0;
-    let mut shift = 0;
-
-    loop {
-        let byte = bytes.next()?;
-        result |= (byte as u32 & 0x7f) << shift;
-
-        if (byte & 0x80) == 0 {
-            break;
-        }
-
-        shift += 7;
-    }
-
-    Some(result)
-}
-
-fn parse_ileb128<I>(mut bytes: I) -> Option<i32>
-where
-    I: Iterator<Item = u8>,
-{
-    let mut result = 0;
-    let mut shift = 0;
-
-    let size = 32;
-
-    let mut byte = 0;
-    loop {
-        byte = bytes.next()?;
-        result |= (byte as i32 & 0x7f) << shift;
-        shift += 7;
-
-        if byte & 0x80 == 0 {
-            break;
-        }
-    }
-
-    if shift < size && byte & 0x80 != 0 {
-        result |= !0 << shift;
-    }
-
-    Some(result)
 }
 
 pub trait Parseable: Sized {
@@ -66,25 +26,32 @@ pub struct Vector<C> {
     items: Vec<C>,
 }
 
-impl<C> Vector<C>
+#[derive(Debug)]
+pub enum VectorError<E> {
+    InvalidSize,
+    ElementError(E),
+}
+
+impl<C> Parseable for Vector<C>
 where
     C: Parseable,
 {
-    pub fn parse<I>(mut iter: I) -> Option<Self>
+    type Error = VectorError<C::Error>;
+
+    fn parse<I>(mut iter: I) -> Result<Self, Self::Error>
     where
         I: Iterator<Item = u8>,
     {
-        let size = parse_uleb128(iter.by_ref())?;
+        let size = parse_uleb128(iter.by_ref()).ok_or(VectorError::InvalidSize)?;
 
         let mut result = Vec::new();
         for _ in 0..size {
-            let item = C::parse(iter.by_ref());
-            if let Ok(i) = item {
-                result.push(i);
-            }
+            let item = C::parse(iter.by_ref()).map_err(|e| VectorError::ElementError(e))?;
+
+            result.push(item);
         }
 
-        Some(Self { items: result })
+        Ok(Self { items: result })
     }
 }
 
@@ -93,20 +60,31 @@ pub struct FunctionType {
     input: ResultType,
     output: ResultType,
 }
+
+#[derive(Debug)]
+pub enum FunctionTypeError {
+    MissingMagicByte,
+    InvalidMagicByte(u8),
+    InvalidInputResultType(ResultTypeError),
+    InvalidOutputResultType(ResultTypeError),
+}
+
 impl Parseable for FunctionType {
-    type Error = ();
+    type Error = FunctionTypeError;
 
     fn parse<I>(mut iter: I) -> Result<Self, Self::Error>
     where
         I: Iterator<Item = u8>,
     {
-        let magic_vec = iter.next().ok_or(())?;
+        let magic_vec = iter.next().ok_or(FunctionTypeError::MissingMagicByte)?;
         if magic_vec != 0x60 {
-            return Err(());
+            return Err(FunctionTypeError::InvalidMagicByte(magic_vec));
         }
 
-        let first = ResultType::parse(iter.by_ref())?;
-        let second = ResultType::parse(iter.by_ref())?;
+        let first =
+            ResultType::parse(iter.by_ref()).map_err(FunctionTypeError::InvalidInputResultType)?;
+        let second =
+            ResultType::parse(iter.by_ref()).map_err(FunctionTypeError::InvalidOutputResultType)?;
 
         Ok(Self {
             input: first,
@@ -120,14 +98,19 @@ pub struct ResultType {
     elements: Vector<ValueType>,
 }
 
+#[derive(Debug)]
+pub enum ResultTypeError {
+    VectorError(VectorError<ValueTypeError>),
+}
+
 impl Parseable for ResultType {
-    type Error = ();
+    type Error = ResultTypeError;
 
     fn parse<I>(iter: I) -> Result<Self, Self::Error>
     where
         I: Iterator<Item = u8>,
     {
-        let elements = Vector::parse(iter).ok_or(())?;
+        let elements = Vector::parse(iter).map_err(ResultTypeError::VectorError)?;
 
         Ok(Self { elements })
     }
@@ -138,18 +121,24 @@ pub enum ValueType {
     Number(NumberType),
 }
 
+#[derive(Debug)]
+pub enum ValueTypeError {
+    MissingType,
+    Unknown(u8),
+}
+
 impl Parseable for ValueType {
-    type Error = ();
+    type Error = ValueTypeError;
 
     fn parse<I>(mut iter: I) -> Result<Self, Self::Error>
     where
         I: Iterator<Item = u8>,
     {
-        let byte = iter.next().ok_or(())?;
+        let byte = iter.next().ok_or(ValueTypeError::MissingType)?;
 
         match byte {
             0x7f => Ok(Self::Number(NumberType::I32)),
-            _ => todo!("Byte: {:x}", byte),
+            other => Err(ValueTypeError::Unknown(other)),
         }
     }
 }
@@ -163,16 +152,21 @@ pub enum NumberType {
 #[derive(Debug)]
 pub struct TypeIndex(u32);
 
-impl Parseable for TypeIndex {
-    type Error = ();
+#[derive(Debug)]
+pub enum TypeIndexError {
+    Missing,
+}
 
-    fn parse<I>(mut iter: I) -> Result<Self, Self::Error>
+impl Parseable for TypeIndex {
+    type Error = TypeIndexError;
+
+    fn parse<I>(iter: I) -> Result<Self, Self::Error>
     where
         I: Iterator<Item = u8>,
     {
         let mut peeked = iter.peekable();
 
-        let index = parse_uleb128(peeked.by_ref()).ok_or(())?;
+        let index = parse_uleb128(peeked.by_ref()).ok_or(TypeIndexError::Missing)?;
 
         Ok(Self(index))
     }
@@ -182,14 +176,20 @@ impl Parseable for TypeIndex {
 pub struct MemoryType {
     limits: Limits,
 }
+
+#[derive(Debug)]
+pub enum MemoryTypeError {
+    LimitsError(LimitsError),
+}
+
 impl Parseable for MemoryType {
-    type Error = ();
+    type Error = MemoryTypeError;
 
     fn parse<I>(mut iter: I) -> Result<Self, Self::Error>
     where
         I: Iterator<Item = u8>,
     {
-        let limits = Limits::parse(iter.by_ref())?;
+        let limits = Limits::parse(iter.by_ref()).map_err(MemoryTypeError::LimitsError)?;
 
         Ok(Self { limits })
     }
@@ -201,28 +201,36 @@ pub struct Limits {
     max: Option<u32>,
 }
 
+#[derive(Debug)]
+pub enum LimitsError {
+    MissingLimitType,
+    UnknownLimitType(u8),
+    InvalidMin,
+    InvalidMax,
+}
+
 impl Parseable for Limits {
-    type Error = ();
+    type Error = LimitsError;
 
     fn parse<I>(mut iter: I) -> Result<Self, Self::Error>
     where
         I: Iterator<Item = u8>,
     {
-        let indicator = iter.next().ok_or(())?;
+        let indicator = iter.next().ok_or(LimitsError::MissingLimitType)?;
 
-        let min = parse_uleb128(iter.by_ref()).ok_or(())?;
+        let min = parse_uleb128(iter.by_ref()).ok_or(LimitsError::InvalidMin)?;
 
         match indicator {
             0x0 => Ok(Self { min, max: None }),
             0x1 => {
-                let max = parse_uleb128(iter.by_ref()).ok_or(())?;
+                let max = parse_uleb128(iter.by_ref()).ok_or(LimitsError::InvalidMax)?;
 
                 Ok(Self {
                     min,
                     max: Some(max),
                 })
             }
-            other => todo!("Unknown id for Limits: {}", other),
+            other => Err(LimitsError::UnknownLimitType(other)),
         }
     }
 }
@@ -232,14 +240,19 @@ pub struct Memory {
     mem_type: MemoryType,
 }
 
+#[derive(Debug)]
+pub enum MemoryError {
+    MemoryTypeError(MemoryTypeError),
+}
+
 impl Parseable for Memory {
-    type Error = ();
+    type Error = MemoryError;
 
     fn parse<I>(mut iter: I) -> Result<Self, Self::Error>
     where
         I: Iterator<Item = u8>,
     {
-        let mem_type = MemoryType::parse(iter.by_ref())?;
+        let mem_type = MemoryType::parse(iter.by_ref()).map_err(MemoryError::MemoryTypeError)?;
 
         Ok(Self { mem_type })
     }
@@ -248,14 +261,19 @@ impl Parseable for Memory {
 #[derive(Debug)]
 pub struct Byte(u8);
 
+#[derive(Debug)]
+pub enum ByteError {
+    Missing,
+}
+
 impl Parseable for Byte {
-    type Error = ();
+    type Error = ByteError;
 
     fn parse<I>(mut iter: I) -> Result<Self, Self::Error>
     where
         I: Iterator<Item = u8>,
     {
-        let value = iter.next().ok_or(())?;
+        let value = iter.next().ok_or(ByteError::Missing)?;
 
         Ok(Self(value))
     }
@@ -264,14 +282,19 @@ impl Parseable for Byte {
 #[derive(Debug)]
 pub struct Name(Vector<Byte>);
 
+#[derive(Debug)]
+pub enum NameError {
+    VectorError(VectorError<ByteError>),
+}
+
 impl Parseable for Name {
-    type Error = ();
+    type Error = NameError;
 
     fn parse<I>(mut iter: I) -> Result<Self, Self::Error>
     where
         I: Iterator<Item = u8>,
     {
-        let inner = Vector::parse(iter.by_ref()).ok_or(())?;
+        let inner = Vector::parse(iter.by_ref()).map_err(NameError::VectorError)?;
 
         Ok(Self(inner))
     }
@@ -283,15 +306,22 @@ pub struct Export {
     desc: ExportDescription,
 }
 
+#[derive(Debug)]
+pub enum ExportError {
+    NameError(NameError),
+    DescriptionError(ExportDescriptionError),
+}
+
 impl Parseable for Export {
-    type Error = ();
+    type Error = ExportError;
 
     fn parse<I>(mut iter: I) -> Result<Self, Self::Error>
     where
         I: Iterator<Item = u8>,
     {
-        let name = Name::parse(iter.by_ref())?;
-        let desc = ExportDescription::parse(iter.by_ref())?;
+        let name = Name::parse(iter.by_ref()).map_err(ExportError::NameError)?;
+        let desc =
+            ExportDescription::parse(iter.by_ref()).map_err(ExportError::DescriptionError)?;
 
         Ok(Self { name, desc })
     }
@@ -305,23 +335,32 @@ pub enum ExportDescription {
     Global(u32),
 }
 
+#[derive(Debug)]
+pub enum ExportDescriptionError {
+    MissingIndicator,
+    MissingId,
+    UnknownIndicator(u8),
+}
+
 impl Parseable for ExportDescription {
-    type Error = ();
+    type Error = ExportDescriptionError;
 
     fn parse<I>(mut iter: I) -> Result<Self, Self::Error>
     where
         I: Iterator<Item = u8>,
     {
-        let ind = iter.next().ok_or(())?;
+        let ind = iter
+            .next()
+            .ok_or(ExportDescriptionError::MissingIndicator)?;
 
-        let id = parse_uleb128(iter.by_ref()).ok_or(())?;
+        let id = parse_uleb128(iter.by_ref()).ok_or(ExportDescriptionError::MissingId)?;
 
         match ind {
             0 => Ok(Self::Function(id)),
             1 => Ok(Self::Table(id)),
             2 => Ok(Self::Memory(id)),
             3 => Ok(Self::Global(id)),
-            other => todo!("Unknown Export {:?}", other),
+            other => Err(ExportDescriptionError::UnknownIndicator(other)),
         }
     }
 }
@@ -332,19 +371,25 @@ pub enum RefType {
     ExternReference,
 }
 
+#[derive(Debug)]
+pub enum RefTypeError {
+    MissingType,
+    UnknownType(u8),
+}
+
 impl Parseable for RefType {
-    type Error = ();
+    type Error = RefTypeError;
 
     fn parse<I>(mut iter: I) -> Result<Self, Self::Error>
     where
         I: Iterator<Item = u8>,
     {
-        let rtype = iter.next().ok_or(())?;
+        let rtype = iter.next().ok_or(RefTypeError::MissingType)?;
 
         match rtype {
             0x70 => Ok(Self::FuncReference),
             0x6f => Ok(Self::ExternReference),
-            other => todo!("Unknown Reference Type {:?}", other),
+            other => Err(RefTypeError::UnknownType(other)),
         }
     }
 }
@@ -355,15 +400,21 @@ pub struct TableType {
     limits: Limits,
 }
 
+#[derive(Debug)]
+pub enum TableTypeError {
+    InvalidElem(RefTypeError),
+    InvalidLimits(LimitsError),
+}
+
 impl Parseable for TableType {
-    type Error = ();
+    type Error = TableTypeError;
 
     fn parse<I>(mut iter: I) -> Result<Self, Self::Error>
     where
         I: Iterator<Item = u8>,
     {
-        let elem = RefType::parse(iter.by_ref())?;
-        let limits = Limits::parse(iter.by_ref())?;
+        let elem = RefType::parse(iter.by_ref()).map_err(TableTypeError::InvalidElem)?;
+        let limits = Limits::parse(iter.by_ref()).map_err(TableTypeError::InvalidLimits)?;
 
         Ok(Self { elem, limits })
     }
@@ -372,14 +423,19 @@ impl Parseable for TableType {
 #[derive(Debug)]
 pub struct Table(TableType);
 
+#[derive(Debug)]
+pub enum TableError {
+    InvalidTableType(TableTypeError),
+}
+
 impl Parseable for Table {
-    type Error = ();
+    type Error = TableError;
 
     fn parse<I>(mut iter: I) -> Result<Self, Self::Error>
     where
         I: Iterator<Item = u8>,
     {
-        let inner = TableType::parse(iter.by_ref())?;
+        let inner = TableType::parse(iter.by_ref()).map_err(TableError::InvalidTableType)?;
 
         Ok(Self(inner))
     }
@@ -388,10 +444,13 @@ impl Parseable for Table {
 #[derive(Debug)]
 pub struct Global {}
 
-impl Parseable for Global {
-    type Error = ();
+#[derive(Debug)]
+pub enum GlobalError {}
 
-    fn parse<I>(iter: I) -> Result<Self, Self::Error>
+impl Parseable for Global {
+    type Error = GlobalError;
+
+    fn parse<I>(_: I) -> Result<Self, Self::Error>
     where
         I: Iterator<Item = u8>,
     {
@@ -405,23 +464,35 @@ pub struct GlobalType {}
 #[derive(Debug)]
 pub enum Instruction {
     ConstantI32(i32),
+    ConstantI64(i64),
+}
+
+#[derive(Debug)]
+pub enum InstructionError {
+    MissingInstruction,
+    UnknownInstruction(u8),
+    InvalidOperand,
 }
 
 impl Parseable for Instruction {
-    type Error = ();
+    type Error = InstructionError;
 
     fn parse<I>(mut iter: I) -> Result<Self, Self::Error>
     where
         I: Iterator<Item = u8>,
     {
-        let instr_ty = iter.next().ok_or(())?;
+        let instr_ty = iter.next().ok_or(InstructionError::MissingInstruction)?;
 
         match instr_ty {
             0x41 => {
-                let con = parse_ileb128(iter.by_ref()).ok_or(())?;
+                let con = parse_ileb128(iter.by_ref()).ok_or(InstructionError::InvalidOperand)?;
                 Ok(Self::ConstantI32(con))
             }
-            other => todo!("Unknown Instruction 0x{:x}", other),
+            0x42 => {
+                let con = parse_ileb128(iter.by_ref()).ok_or(InstructionError::InvalidOperand)?;
+                Ok(Self::ConstantI64(con))
+            }
+            other => Err(InstructionError::UnknownInstruction(other)),
         }
     }
 }
@@ -431,8 +502,13 @@ pub struct Expression {
     instructions: Vec<Instruction>,
 }
 
+#[derive(Debug)]
+pub enum ExpressionError {
+    InvalidInstruction(InstructionError),
+}
+
 impl Parseable for Expression {
-    type Error = ();
+    type Error = ExpressionError;
 
     fn parse<I>(iter: I) -> Result<Self, Self::Error>
     where
@@ -446,7 +522,8 @@ impl Parseable for Expression {
                 break;
             }
 
-            let instr = Instruction::parse(peekable.by_ref())?;
+            let instr = Instruction::parse(peekable.by_ref())
+                .map_err(ExpressionError::InvalidInstruction)?;
             instructions.push(instr);
         }
 
@@ -460,18 +537,23 @@ pub struct Code {
     code: Func,
 }
 
+#[derive(Debug)]
+pub enum CodeError {
+    InvalidSize,
+    InvalidFunc(FuncError),
+}
+
 impl Parseable for Code {
-    type Error = ();
+    type Error = CodeError;
 
     fn parse<I>(mut iter: I) -> Result<Self, Self::Error>
     where
         I: Iterator<Item = u8>,
     {
-        let size = parse_uleb128(iter.by_ref()).unwrap();
-        println!("Size: {:?}", size);
+        let size = parse_uleb128(iter.by_ref()).ok_or(CodeError::InvalidSize)?;
 
         let func_iter = iter.by_ref().take(size as usize);
-        let func = Func::parse(func_iter)?;
+        let func = Func::parse(func_iter).map_err(CodeError::InvalidFunc)?;
 
         Ok(Self { size, code: func })
     }
@@ -483,16 +565,23 @@ pub struct Func {
     exp: Expression,
 }
 
+#[derive(Debug)]
+pub enum FuncError {
+    InvalidLocals(VectorError<LocalError>),
+    InvalidExpression(ExpressionError),
+}
+
 impl Parseable for Func {
-    type Error = ();
+    type Error = FuncError;
 
     fn parse<I>(mut iter: I) -> Result<Self, Self::Error>
     where
         I: Iterator<Item = u8>,
     {
-        let locals: Vector<Local> = Vector::parse(iter.by_ref()).ok_or(())?;
+        let locals: Vector<Local> =
+            Vector::parse(iter.by_ref()).map_err(FuncError::InvalidLocals)?;
 
-        let exp = Expression::parse(iter.by_ref())?;
+        let exp = Expression::parse(iter.by_ref()).map_err(FuncError::InvalidExpression)?;
 
         Ok(Self { locals, exp })
     }
@@ -504,10 +593,13 @@ pub struct Local {
     ty: ValueType,
 }
 
-impl Parseable for Local {
-    type Error = ();
+#[derive(Debug)]
+pub enum LocalError {}
 
-    fn parse<I>(iter: I) -> Result<Self, Self::Error>
+impl Parseable for Local {
+    type Error = LocalError;
+
+    fn parse<I>(_: I) -> Result<Self, Self::Error>
     where
         I: Iterator<Item = u8>,
     {
@@ -526,74 +618,107 @@ pub enum Section {
     CodeSection(Vector<Code>),
 }
 
+#[derive(Debug)]
+pub enum SectionError {
+    TypeSection(VectorError<FunctionTypeError>),
+    FunctionSection(VectorError<TypeIndexError>),
+    TableSection(VectorError<TableError>),
+    MemorySection(VectorError<MemoryError>),
+    GlobalSection(VectorError<GlobalError>),
+    ExportSection(VectorError<ExportError>),
+    CodeSection(VectorError<CodeError>),
+    Unknown(u8),
+}
+
 impl Section {
-    pub fn parse<I>(byte: u8, mut content_iter: I) -> Result<Self, ()>
+    pub fn parse<I>(byte: u8, mut content_iter: I) -> Result<Self, SectionError>
     where
         I: Iterator<Item = u8>,
     {
         match byte {
             0x0 => {
-                println!("Custom Section");
+                // println!("Custom Section");
 
                 todo!()
             }
             0x1 => {
-                let vec: Vector<FunctionType> = Vector::parse(content_iter.by_ref()).unwrap();
+                let vec: Vector<FunctionType> =
+                    Vector::parse(content_iter.by_ref()).map_err(SectionError::TypeSection)?;
 
                 Ok(Section::TypeSection(vec))
             }
             0x3 => {
-                let vec: Vector<TypeIndex> = Vector::parse(content_iter.by_ref()).unwrap();
+                let vec: Vector<TypeIndex> =
+                    Vector::parse(content_iter.by_ref()).map_err(SectionError::FunctionSection)?;
 
                 Ok(Section::FunctionSection(vec))
             }
             0x4 => {
-                let tables: Vector<Table> = Vector::parse(content_iter.by_ref()).unwrap();
+                let tables: Vector<Table> =
+                    Vector::parse(content_iter.by_ref()).map_err(SectionError::TableSection)?;
 
                 Ok(Section::TableSection(tables))
             }
             0x5 => {
-                let memories: Vector<Memory> = Vector::parse(content_iter.by_ref()).unwrap();
+                let memories: Vector<Memory> =
+                    Vector::parse(content_iter.by_ref()).map_err(SectionError::MemorySection)?;
 
                 Ok(Section::MemorySection(memories))
             }
             0x6 => {
-                let globals: Vector<Global> = Vector::parse(content_iter.by_ref()).unwrap();
+                let globals: Vector<Global> =
+                    Vector::parse(content_iter.by_ref()).map_err(SectionError::GlobalSection)?;
 
                 Ok(Section::GlobalSection(globals))
             }
             0x7 => {
-                let exports: Vector<Export> = Vector::parse(content_iter.by_ref()).unwrap();
+                let exports: Vector<Export> =
+                    Vector::parse(content_iter.by_ref()).map_err(SectionError::ExportSection)?;
 
                 Ok(Section::ExportSection(exports))
             }
             0xa => {
-                let code_entries: Vector<Code> = Vector::parse(content_iter.by_ref()).unwrap();
+                let code_entries: Vector<Code> =
+                    Vector::parse(content_iter.by_ref()).map_err(SectionError::CodeSection)?;
 
                 Ok(Section::CodeSection(code_entries))
             }
-            other => {
-                todo!("Unknown Section ID {:?}", other);
-            }
+            other => Err(SectionError::Unknown(other)),
         }
     }
 }
 
+#[derive(Debug)]
+pub enum ModuleError {
+    InvalidSectionSize,
+    InvalidSection(SectionError),
+}
+
 impl Module {
-    pub fn parse(bytes: &[u8]) -> Result<Self, ()> {
+    pub fn parse(bytes: &[u8]) -> Result<Self, ModuleError> {
         let mut byte_iter = bytes.iter().copied();
 
         let magic: Vec<u8> = byte_iter.by_ref().take(4).collect();
-        println!("Magic: {:?}", magic);
+        assert_eq!(&[0b00, b'a', b's', b'm'] as &[u8], &magic as &[u8]);
 
-        let version: Vec<u8> = byte_iter.by_ref().take(4).collect();
-        println!("Version: {:?}", version);
+        let version = {
+            let mut tmp = [0, 0, 0, 0];
+
+            for (index, val) in byte_iter.by_ref().take(4).enumerate() {
+                tmp[index] = val;
+            }
+
+            u32::from_le_bytes(tmp)
+        };
+        assert_eq!(1, version);
 
         let mut sections = Vec::new();
         while let Some(byte) = byte_iter.next() {
-            let size = parse_uleb128(byte_iter.by_ref()).unwrap();
+            let size: u32 =
+                parse_uleb128(byte_iter.by_ref()).ok_or(ModuleError::InvalidSectionSize)?;
 
-            let section = Section::parse(byte, byte_iter.by_ref().take(size as usize)).unwrap();
+            let section = Section::parse(byte, byte_iter.by_ref().take(size as usize))
+                .map_err(ModuleError::InvalidSection)?;
             sections.push(section);
         }
 
@@ -619,7 +744,7 @@ mod tests {
 
         let module = Module::parse(&module);
 
-        dbg!(module);
+        dbg!(&module);
 
         unreachable!()
     }
