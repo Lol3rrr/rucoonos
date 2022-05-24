@@ -42,12 +42,12 @@ pub use api::*;
 
 mod cards;
 mod handler;
+mod interrupt;
 
 pub mod protocols;
 
 static HANDLE_QUEUE: spin::Once<nolock::queues::mpsc::jiffy::AsyncSender<HandlerMessage>> =
     spin::Once::new();
-static DEVICES_: spin::Once<spin::Mutex<Vec<hardware::device::NetworkDevice>>> = spin::Once::new();
 static IPS: spin::Once<protocols::IpMap> = spin::Once::new();
 static DEVICE_QUEUES: spin::Once<BTreeMap<usize, PacketQueueSender>> = spin::Once::new();
 
@@ -80,7 +80,10 @@ impl kernel::Extension<&Hardware> for NetworkExtension {
             }
         };
 
-        let network_devices: Vec<_> = hardware
+        let (network_devices, devices): (
+            Vec<_>,
+            Vec<Box<dyn NetworkingDevice + Send + Sync + 'static>>,
+        ) = hardware
             .pci_devices()
             .enumerate()
             .filter_map(|(id, header)| {
@@ -88,27 +91,32 @@ impl kernel::Extension<&Hardware> for NetworkExtension {
                     println!("E1000 Networking Controller: {:?}", header);
 
                     match hardware::device::E1000Driver::new(id, header, offset) {
-                        Ok((n_device, meta, n_queue)) => Some(hardware::device::NetworkDevice {
-                            mac: n_device.mac_address(),
-                            device: Box::new(n_device),
-                            metadata: meta,
-                            packet_queue: n_queue,
-                            udp_bindings: spin::Mutex::new(BTreeMap::new()),
-                        }),
+                        Ok((n_device, meta, n_queue)) => Some((
+                            hardware::device::NetworkDevice {
+                                id: n_device.id(),
+                                mac: n_device.mac_address(),
+                                metadata: meta,
+                                packet_queue: n_queue,
+                                udp_bindings: spin::Mutex::new(BTreeMap::new()),
+                            },
+                            Box::new(n_device) as Box<dyn NetworkingDevice + Send + Sync + 'static>,
+                        )),
                         Err(_) => None,
                     }
                 } else {
                     None
                 }
             })
-            .collect();
+            .unzip();
+
+        interrupt::init_devices(devices);
+
         DEVICE_QUEUES.call_once(|| {
             network_devices
                 .iter()
-                .map(|dev| (dev.device.id(), dev.packet_queue.clone()))
+                .map(|dev| (dev.id, dev.packet_queue.clone()))
                 .collect()
         });
-        DEVICES_.call_once(|| spin::Mutex::new(network_devices));
 
         let (paket_recv, paket_sender) = nolock::queues::mpsc::jiffy::async_queue();
         HANDLE_QUEUE.call_once(|| paket_sender);
@@ -121,57 +129,19 @@ impl kernel::Extension<&Hardware> for NetworkExtension {
         }
 
         // We return our new Handler
-        Box::pin(handler::network_handler(paket_recv))
+        Box::pin(handler::network_handler(network_devices, paket_recv))
     }
 }
 
 /// The Interrupt Handler for networking Interrupts
 extern "x86-interrupt" fn network_interrupt(_stack_frame: InterruptStackFrame) {
     let span = tracing::error_span!("Networking-Interrupt");
-    span.in_scope(|| {
-        handle_interrupt(HANDLE_QUEUE.get());
-    });
+    span.in_scope(|| interrupt::handle_interrupt(HANDLE_QUEUE.get()));
 
     unsafe {
         interrupts::PICS
             .lock()
             .notify_end_of_interrupt(interrupts::PIC_1_OFFSET + 0xb);
-    }
-}
-
-fn handle_interrupt(queue: Option<&nolock::queues::mpsc::jiffy::AsyncSender<HandlerMessage>>) {
-    let pqueue = match queue {
-        Some(q) => q,
-        None => {
-            tracing::error!("PacketQueue not initialized");
-            return;
-        }
-    };
-
-    let raw_devices = DEVICES_.get().expect("");
-    let mut devices = raw_devices.lock();
-
-    for device in devices.iter_mut() {
-        let hardware::device::NetworkDevice {
-            device: n_device,
-            metadata: meta,
-            packet_queue: queue,
-            udp_bindings: raw_udp_bindings,
-            ..
-        } = device;
-        let udp_bindings = raw_udp_bindings.lock();
-
-        if !n_device.handles_interrupt(0xb) {
-            continue;
-        }
-
-        let mut ctx = crate::hardware::device::NetworkingCtx {
-            meta,
-            queue,
-            ips: IPS.get().expect(""),
-            udp_bindings: &udp_bindings,
-        };
-        n_device.handle_interrupt(&mut ctx, pqueue);
     }
 }
 

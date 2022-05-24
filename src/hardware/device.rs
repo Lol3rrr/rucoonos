@@ -1,13 +1,8 @@
-use core::sync::atomic::{AtomicBool, Ordering};
+use core::sync::atomic::AtomicBool;
 
-use alloc::{
-    boxed::Box,
-    collections::{BTreeMap, VecDeque},
-    sync::Arc,
-    vec::Vec,
-};
+use alloc::{boxed::Box, collections::BTreeMap, sync::Arc};
 
-use crate::{extensions::protocols, println};
+use crate::extensions::protocols;
 
 use super::pci;
 
@@ -19,9 +14,8 @@ pub enum Device {
 }
 
 pub struct NetworkDevice {
+    pub id: usize,
     pub mac: [u8; 6],
-    /// A handle to the actual underlying Device/Driver
-    pub device: Box<dyn NetworkingDevice + Send + 'static>,
     /// The Queue to enqueue Packets on to send out over the Queue
     pub packet_queue: PacketQueueSender,
     pub metadata: NetworkingMetadata,
@@ -73,7 +67,6 @@ pub trait NetworkingDevice {
     /// Gets called if an interrupt occurs for the Networking Device
     fn handle_interrupt(
         &mut self,
-        ctx: &mut NetworkingCtx,
         queue: &nolock::queues::mpsc::jiffy::AsyncSender<crate::extensions::HandlerMessage>,
     );
 }

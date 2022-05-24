@@ -20,6 +20,7 @@ pub struct E1000Card {
 }
 
 unsafe impl Send for E1000Card {}
+unsafe impl Sync for E1000Card {}
 
 mod coms;
 mod descriptors;
@@ -378,7 +379,6 @@ impl NetworkingDevice for E1000Card {
 
     fn handle_interrupt(
         &mut self,
-        ctx: &mut NetworkingCtx,
         queue: &nolock::queues::mpsc::jiffy::AsyncSender<crate::extensions::HandlerMessage>,
     ) {
         let cause = self.get_intterupt_cause();

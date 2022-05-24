@@ -22,17 +22,12 @@
 /// This might be solveable by allowing the Panic-Handler to hook into the Queue and force output
 /// all the pending logs.
 use core::{
-    fmt::{Display, Write},
+    fmt::Write,
     future::Future,
     sync::atomic::{AtomicU64, Ordering},
 };
 
-use alloc::{
-    collections::BTreeMap,
-    string::{String, ToString},
-    vec::Vec,
-};
-use nolock::queues::mpsc::jiffy::AsyncReceiver;
+use alloc::{collections::BTreeMap, string::String, vec::Vec};
 
 use crate::println;
 
@@ -89,9 +84,9 @@ impl tracing::Subscriber for SerialSubscriber {
         id
     }
 
-    fn record(&self, span: &tracing::span::Id, values: &tracing::span::Record<'_>) {}
+    fn record(&self, _span: &tracing::span::Id, _values: &tracing::span::Record<'_>) {}
 
-    fn record_follows_from(&self, span: &tracing::span::Id, follows: &tracing::span::Id) {}
+    fn record_follows_from(&self, _span: &tracing::span::Id, _follows: &tracing::span::Id) {}
 
     fn event(&self, event: &tracing::Event<'_>) {
         let mut content = String::new();
@@ -155,7 +150,15 @@ async fn logger(mut queue: nolock::queues::mpsc::jiffy::AsyncReceiver<Subscriber
                 }
             }
             SubscriberMessage::Exit(id) => {
-                current_name.pop();
+                let exit_name = match span_names.get(&id.into_u64()) {
+                    Some(n) => n,
+                    None => continue,
+                };
+                if let Some(last) = current_name.last() {
+                    if last == exit_name {
+                        current_name.pop();
+                    }
+                }
             }
             SubscriberMessage::Event { content, level } => {
                 let name = current_name.last().copied().unwrap_or("");

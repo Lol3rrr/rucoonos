@@ -1,5 +1,3 @@
-use core::future::Future;
-
 use crate::{
     acpi::{self, OffsetMapper, RSDT},
     gdt, interrupts,
@@ -7,9 +5,8 @@ use crate::{
     println,
 };
 
-use alloc::{boxed::Box, collections::BTreeMap, vec::Vec};
+use alloc::vec::Vec;
 use bootloader::boot_info::Optional;
-use rucoon::runtime::{AddTaskError, RunError, TaskID};
 use x86_64::{structures::paging::OffsetPageTable, VirtAddr};
 
 mod allocator;
@@ -111,7 +108,7 @@ impl Hardware {
 
     /// This is used to obtain configuration about PCI
     fn setup_pci(physical_memory_offset: Optional<u64>) -> Vec<device::Device> {
-        let offset = match physical_memory_offset {
+        let _offset = match physical_memory_offset {
             Optional::Some(o) => o,
             _ => return Vec::new(),
         };

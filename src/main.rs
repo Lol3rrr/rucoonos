@@ -147,9 +147,8 @@ fn kernel_main(boot_info: &'static mut bootloader::BootInfo) -> ! {
     panic!("Done")
 }
 
+#[tracing::instrument]
 async fn ping(target_ip: [u8; 4]) {
-    let kernel = hardware::Hardware::try_get().unwrap();
-
     let mac = crate::extensions::get_mac(target_ip).await.expect("");
     tracing::info!("Target-Mac {:?}", mac);
 
@@ -157,6 +156,8 @@ async fn ping(target_ip: [u8; 4]) {
         crate::extensions::raw_ping(target_ip, mac).await;
 
         tracing::info!("Received Ping");
+
+        rucoon::futures::yield_now().await;
     }
 }
 

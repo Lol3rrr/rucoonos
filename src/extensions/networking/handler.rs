@@ -1,16 +1,16 @@
 use core::sync::atomic::{AtomicBool, Ordering};
 
-use alloc::{collections::BTreeMap, sync::Arc};
+use alloc::{collections::BTreeMap, sync::Arc, vec::Vec};
 
 use crate::{
     extensions::{protocols, ActionRequest},
-    hardware::device::DHCPExchange,
+    hardware::device::{DHCPExchange, NetworkDevice},
     println,
 };
 
 use super::{
     protocols::{arp, ethernet::EthType},
-    HandlerMessage, RawPacket, DEVICES_, IPS,
+    HandlerMessage, RawPacket, IPS,
 };
 
 struct Bindings<'m> {
@@ -20,13 +20,13 @@ struct Bindings<'m> {
 }
 
 /// This handler will actually properly handle all the Packets that were received by the Network Card
-#[tracing::instrument(name = "network_handler")]
+#[tracing::instrument(name = "network_handler", skip(devices, paket_recv))]
 pub async fn network_handler(
+    mut devices: Vec<NetworkDevice>,
     mut paket_recv: nolock::queues::mpsc::jiffy::AsyncReceiver<HandlerMessage>,
 ) {
-    let device_list = DEVICES_.get().expect("");
     x86_64::instructions::interrupts::without_interrupts(|| {
-        for device in device_list.lock().iter_mut() {
+        for device in devices.iter_mut() {
             let indicator = Arc::new(AtomicBool::new(false));
 
             let tx_id = 0x12345678;
@@ -40,7 +40,6 @@ pub async fn network_handler(
             );
         }
     });
-    let _ = device_list;
 
     tracing::info!("After Init");
 
@@ -77,6 +76,7 @@ pub async fn network_handler(
                 x86_64::instructions::interrupts::without_interrupts(|| {
                     handle_packet_(
                         raw_paket,
+                        &mut devices,
                         Bindings {
                             udp: &mut udp_bindings,
                             arp: &mut arp_bindings,
@@ -95,7 +95,7 @@ pub async fn network_handler(
                         arp_bindings.insert(ip, ret_queue);
 
                         x86_64::instructions::interrupts::without_interrupts(|| {
-                            for device in DEVICES_.get().expect("").lock().iter() {
+                            for device in devices.iter() {
                                 device.packet_queue.enqueue(
                                     protocols::arp::PacketBuilder::new()
                                         .sender(
@@ -124,7 +124,7 @@ pub async fn network_handler(
                         ping_bindings.insert(ip.clone(), (waker, result));
 
                         x86_64::instructions::interrupts::without_interrupts(|| {
-                            for device in DEVICES_.get().expect("").lock().iter() {
+                            for device in devices.iter() {
                                 let packet = protocols::icmp::PacketBuilder::new()
                                     .set_type(protocols::icmp::Type::EchoRequest {
                                         identifier: 0x1234,
@@ -156,15 +156,10 @@ pub async fn network_handler(
     }
 }
 
-fn handle_packet_(raw: RawPacket, mut bindings: Bindings<'_>) {
+fn handle_packet_(raw: RawPacket, devices: &mut Vec<NetworkDevice>, bindings: Bindings<'_>) {
     let buffer = raw.buffer;
 
-    let devices = DEVICES_.get().expect("");
-    let mut locked_devices = devices.lock();
-    let device = locked_devices
-        .iter_mut()
-        .find(|d| d.device.id() == raw.id)
-        .unwrap();
+    let device = devices.iter_mut().find(|d| d.id == raw.id).unwrap();
 
     let eth_packet = protocols::ethernet::Packet::new(buffer);
 
