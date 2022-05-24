@@ -3,7 +3,7 @@ use core::sync::atomic::{AtomicBool, Ordering};
 use alloc::{collections::BTreeMap, sync::Arc, vec::Vec};
 
 use crate::{
-    extensions::{protocols, ActionRequest},
+    extensions::networking::{protocols, ActionRequest},
     hardware::device::{DHCPExchange, NetworkDevice},
     println,
 };

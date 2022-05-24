@@ -2,7 +2,7 @@ use core::sync::atomic::AtomicBool;
 
 use alloc::{boxed::Box, collections::BTreeMap, sync::Arc};
 
-use crate::extensions::protocols;
+use crate::extensions::networking::protocols;
 
 use super::pci;
 
@@ -67,7 +67,9 @@ pub trait NetworkingDevice {
     /// Gets called if an interrupt occurs for the Networking Device
     fn handle_interrupt(
         &mut self,
-        queue: &nolock::queues::mpsc::jiffy::AsyncSender<crate::extensions::HandlerMessage>,
+        queue: &nolock::queues::mpsc::jiffy::AsyncSender<
+            crate::extensions::networking::HandlerMessage,
+        >,
     );
 }
 
@@ -114,11 +116,17 @@ impl E1000Driver {
 
 #[derive(Clone)]
 pub struct PacketQueueSender {
-    queue: Arc<nolock::queues::mpsc::jiffy::Sender<crate::extensions::protocols::ethernet::Packet>>,
+    queue: Arc<
+        nolock::queues::mpsc::jiffy::Sender<
+            crate::extensions::networking::protocols::ethernet::Packet,
+        >,
+    >,
     notify: Arc<dyn Fn() + 'static + Send + Sync>,
 }
 pub struct PacketQueueReceiver {
-    queue: nolock::queues::mpsc::jiffy::Receiver<crate::extensions::protocols::ethernet::Packet>,
+    queue: nolock::queues::mpsc::jiffy::Receiver<
+        crate::extensions::networking::protocols::ethernet::Packet,
+    >,
 }
 
 fn create_packetqueue<F>() -> (impl FnOnce(F) -> PacketQueueSender, PacketQueueReceiver)

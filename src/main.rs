@@ -10,7 +10,7 @@ extern crate alloc;
 use core::panic::PanicInfo;
 
 use kernel::Kernel;
-use rucoonos::extensions::protocols;
+use rucoonos::extensions::networking::protocols;
 use rucoonos::*;
 
 /// This function is called on panic.
@@ -35,7 +35,7 @@ fn kernel_main(boot_info: &'static mut bootloader::BootInfo) -> ! {
     let kernel = Kernel::setup(hardware);
 
     // Setup tracing for the Kernel
-    kernel.add_extension(crate::extensions::logging::LogExtension::new(
+    kernel.add_extension(crate::extensions::LogExtension::new(
         crate::extensions::logging::LogLevel::Debug,
     ));
 
@@ -148,11 +148,13 @@ fn kernel_main(boot_info: &'static mut bootloader::BootInfo) -> ! {
 
 #[tracing::instrument]
 async fn ping(target_ip: [u8; 4]) {
-    let mac = crate::extensions::get_mac(target_ip).await.expect("");
+    let mac = crate::extensions::networking::get_mac(target_ip)
+        .await
+        .expect("");
     tracing::info!("Target-Mac {:?}", mac);
 
     loop {
-        crate::extensions::raw_ping(target_ip, mac).await;
+        crate::extensions::networking::raw_ping(target_ip, mac).await;
 
         tracing::info!("Received Ping");
 

@@ -379,7 +379,9 @@ impl NetworkingDevice for E1000Card {
 
     fn handle_interrupt(
         &mut self,
-        queue: &nolock::queues::mpsc::jiffy::AsyncSender<crate::extensions::HandlerMessage>,
+        queue: &nolock::queues::mpsc::jiffy::AsyncSender<
+            crate::extensions::networking::HandlerMessage,
+        >,
     ) {
         let cause = self.get_intterupt_cause();
 
@@ -398,9 +400,9 @@ impl NetworkingDevice for E1000Card {
                 let addr = self.rx_buffers[self.cur_rx as usize];
                 let slice = unsafe { core::slice::from_raw_parts(addr, len as usize) };
 
-                let buffer = crate::extensions::protocols::Buffer::new(slice);
-                let _ = queue.enqueue(crate::extensions::HandlerMessage::Packet(
-                    crate::extensions::RawPacket {
+                let buffer = crate::extensions::networking::protocols::Buffer::new(slice);
+                let _ = queue.enqueue(crate::extensions::networking::HandlerMessage::Packet(
+                    crate::extensions::networking::RawPacket {
                         buffer,
                         id: self.id,
                     },
@@ -455,7 +457,7 @@ impl NetworkingDevice for E1000Card {
 
                 let tx_data_ptr = self.tx_buffers[tx_index as usize];
                 let buffer = unsafe {
-                    crate::extensions::protocols::Buffer::from_raw(
+                    crate::extensions::networking::protocols::Buffer::from_raw(
                         tx_data_ptr as *mut u8 as *mut [u8; 2048],
                         0,
                     )
