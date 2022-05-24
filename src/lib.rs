@@ -31,8 +31,6 @@ pub mod serial;
 pub mod vga;
 pub mod video;
 
-pub mod logging;
-
 pub mod futures;
 
 #[alloc_error_handler]

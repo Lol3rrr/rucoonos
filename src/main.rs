@@ -35,10 +35,9 @@ fn kernel_main(boot_info: &'static mut bootloader::BootInfo) -> ! {
     let kernel = Kernel::setup(hardware);
 
     // Setup tracing for the Kernel
-    let (subscriber, sub_process) = logging::serial(logging::LogLevel::Debug);
-    tracing::subscriber::set_global_default(subscriber)
-        .expect("Registering the Logger should always work");
-    kernel.handle().add_task(sub_process);
+    kernel.add_extension(crate::extensions::logging::LogExtension::new(
+        crate::extensions::logging::LogLevel::Debug,
+    ));
 
     kernel.add_extension(crate::extensions::NetworkExtension::new());
 

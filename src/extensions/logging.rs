@@ -27,12 +27,32 @@ use core::{
     sync::atomic::{AtomicU64, Ordering},
 };
 
-use alloc::{collections::BTreeMap, string::String, vec::Vec};
+use alloc::{boxed::Box, collections::BTreeMap, string::String, vec::Vec};
 
 use crate::println;
 
 mod level;
 pub use level::LogLevel;
+
+pub struct LogExtension {
+    level: LogLevel,
+}
+
+impl LogExtension {
+    pub fn new(level: LogLevel) -> Self {
+        Self { level }
+    }
+}
+impl<H> kernel::Extension<H> for LogExtension {
+    fn setup(self, hardware: &H) -> core::pin::Pin<alloc::boxed::Box<dyn Future<Output = ()>>> {
+        let (sub, task) = serial(self.level);
+
+        tracing::subscriber::set_global_default(sub)
+            .expect("Registering the Logger should always work");
+
+        Box::pin(task)
+    }
+}
 
 #[derive(Debug)]
 enum SubscriberMessage {
@@ -117,7 +137,7 @@ impl tracing::Subscriber for SerialSubscriber {
     }
 }
 
-pub fn serial(level: LogLevel) -> (SerialSubscriber, impl Future<Output = ()>) {
+fn serial(level: LogLevel) -> (SerialSubscriber, impl Future<Output = ()>) {
     let (recv, send) = nolock::queues::mpsc::jiffy::async_queue();
 
     (
