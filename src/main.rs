@@ -6,6 +6,8 @@
 #![reexport_test_harness_main = "test_main"]
 
 extern crate alloc;
+use alloc::boxed::Box;
+use alloc::vec::Vec;
 
 use core::panic::PanicInfo;
 
@@ -40,6 +42,18 @@ fn kernel_main(boot_info: &'static mut bootloader::BootInfo) -> ! {
     ));
 
     kernel.add_extension(crate::extensions::NetworkExtension::new());
+
+    kernel.add_extension(crate::extensions::wasm_programs::WasmProgram::new(
+        wasm_interpret::vm::handler::ExternalHandlerConstant::new("external", |_| {
+            Box::pin(async move {
+                let mut result = Vec::new();
+                result.push(wasm_interpret::vm::StackValue::I32(7));
+                result
+            })
+        }),
+        include_bytes!("../wasm-interpret/tests/extern_func.wasm"),
+        "main",
+    ));
 
     if let Some(iter) = kernel.hardware().get_rsdt_entries() {
         for entry in iter {

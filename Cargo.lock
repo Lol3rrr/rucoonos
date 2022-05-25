@@ -330,6 +330,7 @@ dependencies = [
  "tracing",
  "uart_16550",
  "volatile 0.2.7",
+ "wasm-interpret",
  "x86_64",
 ]
 

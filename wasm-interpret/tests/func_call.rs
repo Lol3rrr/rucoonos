@@ -15,7 +15,7 @@ async fn func_call() {
     let env = vm::Environment::new(vm::handler::empty_handler());
     let mut interpreter = vm::Interpreter::new(env, &module);
 
-    let compute_res = interpreter.run_completion("main").await;
+    let compute_res = interpreter.run_with_wait("main", || None).await;
     dbg!(&compute_res);
 
     assert_eq!(Ok(vm::StackValue::I32(2)), compute_res);

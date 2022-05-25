@@ -25,6 +25,7 @@ rucoon = { path = "../rucoon" }
 nolock = { git = "https://github.com/Lol3rrr/nolock.git", rev = "6d6df6cdd6ee890d0cf578ab9ee02769544bacdd", default_features=false, features = ["queues", "async"] }
 
 kernel = { path = "./kernel" }
+wasm-interpret = { path = "./wasm-interpret" }
 
 tracing = { version = "0.1", default-features = false, features = ["attributes"] }
 

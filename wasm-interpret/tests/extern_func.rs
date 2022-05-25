@@ -22,7 +22,7 @@ async fn extern_func() {
     let env = vm::Environment::new(handler);
     let mut interpreter = vm::Interpreter::new(env, &module);
 
-    let compute_res = interpreter.run_completion("main").await;
+    let compute_res = interpreter.run_with_wait("main", || None).await;
     dbg!(&compute_res);
 
     assert_eq!(Ok(vm::StackValue::I32(3)), compute_res);

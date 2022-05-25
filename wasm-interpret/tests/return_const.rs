@@ -15,6 +15,6 @@ async fn return_const() {
     let env = vm::Environment::new(vm::handler::empty_handler());
     let mut interpreter = vm::Interpreter::new(env, &module);
 
-    let compute_res = interpreter.run_completion("main").await;
+    let compute_res = interpreter.run_with_wait("main", || None).await;
     assert_eq!(Ok(vm::StackValue::I32(42)), compute_res);
 }

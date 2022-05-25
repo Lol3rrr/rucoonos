@@ -1,4 +1,6 @@
-use alloc::{collections::BTreeMap, string::String, vec::Vec};
+use core::{future::Future, pin::Pin};
+
+use alloc::{boxed::Box, collections::BTreeMap, string::String, vec::Vec};
 
 use crate::{
     ExportDescription, Func, FuncId, FunctionType, ImportDescription, Instruction, IntegerVariant,
@@ -9,8 +11,13 @@ use self::handler::ExternalHandler;
 
 pub mod handler;
 
+mod state;
+pub use state::StackValue;
+use state::State;
+
 pub struct HandleOpStack<'s> {
     stack: &'s mut Vec<StackValue>,
+    arguments: usize,
 }
 
 pub struct Environment<EH> {
@@ -34,21 +41,6 @@ pub struct Interpreter<'m, EH> {
     functions: BTreeMap<u32, Function<'m>>,
 
     exec_state: State,
-}
-
-struct State {
-    func: u32,
-    pc: usize,
-    op_stack: Vec<StackValue>,
-    current_frame: StackFrame,
-    call_stack: Vec<StackFrame>,
-}
-
-#[derive(Debug)]
-struct StackFrame {
-    locals: Vec<StackValue>,
-    func: u32,
-    pc: usize,
 }
 
 #[derive(Debug, PartialEq)]
@@ -157,17 +149,7 @@ where
             func_names: exported_func,
             imported_funcs,
 
-            exec_state: State {
-                func: 0,
-                pc: 0,
-                op_stack: Vec::new(),
-                call_stack: Vec::new(),
-                current_frame: StackFrame {
-                    locals: Vec::new(),
-                    func: 0,
-                    pc: 0,
-                },
-            },
+            exec_state: State::new(0, Vec::new()),
         }
     }
 
@@ -196,7 +178,14 @@ where
             .collect()
     }
 
-    pub async fn run_completion(&mut self, name: &str) -> Result<StackValue, RunError> {
+    pub async fn run_with_wait<F>(
+        &mut self,
+        name: &str,
+        mut wait: F,
+    ) -> Result<StackValue, RunError>
+    where
+        F: FnMut() -> Option<Pin<Box<dyn Future<Output = ()>>>>,
+    {
         let func_id = self.func_names.get(name).copied().ok_or_else(|| RunError {
             err: RunErrorType::UnknownFuncName(String::from(name)),
             ctx: RunErrorContext {},
@@ -222,13 +211,7 @@ where
             }
         };
 
-        self.exec_state.func = func_id;
-        self.exec_state.pc = 0;
-        self.exec_state.current_frame = StackFrame {
-            func: self.exec_state.func,
-            pc: self.exec_state.pc,
-            locals: self.locals(func),
-        };
+        self.exec_state = State::new(func_id, self.locals(func));
 
         'outer: loop {
             let func = match self.functions.get(&self.exec_state.func) {
@@ -251,11 +234,16 @@ where
             for instr in instructions {
                 self.exec_state.pc += 1;
 
+                // If we want to wait for something
+                if let Some(w) = wait() {
+                    w.await;
+                }
+
                 match instr {
                     Instruction::ConstantI32(con) => {
                         self.exec_state.op_stack.push(StackValue::I32(*con));
                     }
-                    Instruction::LoadI32(MemArg { align, offset }) => {
+                    Instruction::LoadI32(MemArg { offset, .. }) => {
                         let dyn_address = match self.exec_state.op_stack.pop() {
                             Some(StackValue::I32(v)) => v,
                             _ => {
@@ -279,7 +267,7 @@ where
                         let value = i32::from_le_bytes(raw_value);
                         self.exec_state.op_stack.push(StackValue::I32(value));
                     }
-                    Instruction::StoreI32(MemArg { align, offset }) => {
+                    Instruction::StoreI32(MemArg { offset, .. }) => {
                         let value = match self.exec_state.op_stack.pop() {
                             Some(StackValue::I32(v)) => v,
                             _ => {
@@ -376,13 +364,7 @@ where
                         };
                     }
                     Instruction::LocalGet(id) => {
-                        let local_var = match self
-                            .exec_state
-                            .current_frame
-                            .locals
-                            .get(id.0 as usize)
-                            .cloned()
-                        {
+                        let local_var = match self.exec_state.get_local(id.0).cloned() {
                             Some(v) => v,
                             None => {
                                 return Err(RunError {
@@ -405,16 +387,15 @@ where
                             }
                         };
 
-                        let local_var =
-                            match self.exec_state.current_frame.locals.get_mut(id.0 as usize) {
-                                Some(v) => v,
-                                None => {
-                                    return Err(RunError {
-                                        err: RunErrorType::UnknownLocal(id.clone()),
-                                        ctx: RunErrorContext {},
-                                    })
-                                }
-                            };
+                        let local_var = match self.exec_state.get_local_mut(id.0) {
+                            Some(v) => v,
+                            None => {
+                                return Err(RunError {
+                                    err: RunErrorType::UnknownLocal(id.clone()),
+                                    ctx: RunErrorContext {},
+                                })
+                            }
+                        };
 
                         match (local_var, value) {
                             (StackValue::I32(lvar), StackValue::I32(nvar)) => {
@@ -439,16 +420,15 @@ where
                             }
                         };
 
-                        let local_var =
-                            match self.exec_state.current_frame.locals.get_mut(id.0 as usize) {
-                                Some(v) => v,
-                                None => {
-                                    return Err(RunError {
-                                        err: RunErrorType::UnknownLocal(id.clone()),
-                                        ctx: RunErrorContext {},
-                                    })
-                                }
-                            };
+                        let local_var = match self.exec_state.get_local_mut(id.0) {
+                            Some(v) => v,
+                            None => {
+                                return Err(RunError {
+                                    err: RunErrorType::UnknownLocal(id.clone()),
+                                    ctx: RunErrorContext {},
+                                })
+                            }
+                        };
 
                         match (local_var, value) {
                             (StackValue::I32(lvar), StackValue::I32(nvar)) => {
@@ -467,21 +447,7 @@ where
                             Some(Function::Internal(f, t)) => {
                                 let func = (*f, *t);
 
-                                let n_frame = StackFrame {
-                                    func: cid.0,
-                                    pc: 0,
-                                    locals: self.locals(func),
-                                };
-
-                                let mut current_frame =
-                                    core::mem::replace(&mut self.exec_state.current_frame, n_frame);
-                                current_frame.func = self.exec_state.func;
-                                current_frame.pc = self.exec_state.pc;
-
-                                self.exec_state.call_stack.push(current_frame);
-
-                                self.exec_state.func = cid.0;
-                                self.exec_state.pc = 0;
+                                self.exec_state.go_into_func(cid.0, self.locals(func));
                             }
                             Some(Function::External) => {
                                 let name = match self.imported_funcs.get(&cid.0) {
@@ -493,8 +459,11 @@ where
                                     todo!("Handler does not handle called External Function")
                                 }
 
+                                // TODO
+                                // Figure out how many arguments the external Function receives
                                 let op_stack = HandleOpStack {
                                     stack: &mut self.exec_state.op_stack,
+                                    arguments: 0,
                                 };
                                 let result = self.env.external_handler.handle(name, op_stack).await;
 
@@ -511,12 +480,8 @@ where
                 };
             }
 
-            if let Some(prev_frame) = self.exec_state.call_stack.pop() {
-                self.exec_state.func = prev_frame.func;
-                self.exec_state.pc = prev_frame.pc;
-                self.exec_state.current_frame = prev_frame;
-
-                continue 'outer;
+            if self.exec_state.has_predecessor() {
+                self.exec_state.return_from_func().unwrap();
             }
 
             break;
@@ -527,10 +492,4 @@ where
             ctx: RunErrorContext {},
         })
     }
-}
-
-#[derive(Debug, PartialEq, Clone)]
-pub enum StackValue {
-    I32(i32),
-    I64(i64),
 }

@@ -13,3 +13,5 @@ pub use networking::NetworkExtension;
 
 pub mod logging;
 pub use logging::LogExtension;
+
+pub mod wasm_programs;

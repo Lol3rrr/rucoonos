@@ -4,6 +4,7 @@ use alloc::{boxed::Box, vec::Vec};
 
 use super::{HandleOpStack, StackValue};
 
+/// A Handler represents a way to provide external Functions to a WASM environment
 pub trait ExternalHandler: Sized {
     /// Whether or not the current Handler handles the external function with the given name
     fn handles(&self, name: &str) -> bool;
@@ -26,6 +27,13 @@ pub trait ExternalHandler: Sized {
         }
     }
 
+    /// Chain `self` and `other` together.
+    ///
+    /// # Behaviour
+    /// If self  handles a given External Function, we use self to handle it.
+    /// If other handles a given External Function, we use other to handle it.
+    ///
+    /// If both handle a function we prefer self over other as it is the first entry
     fn chain<O>(self, other: O) -> ExternalHandlerChain<Self, O>
     where
         O: ExternalHandler,
@@ -64,6 +72,32 @@ pub struct ExternalHandlerSwitch<S, I> {
 pub struct ExternalHandlerChain<F, S> {
     first: F,
     second: S,
+}
+
+impl<F, S> ExternalHandler for ExternalHandlerChain<F, S>
+where
+    F: ExternalHandler,
+    S: ExternalHandler,
+{
+    fn handles(&self, name: &str) -> bool {
+        self.first.handles(name) || self.second.handles(name)
+    }
+
+    fn handle(
+        &mut self,
+        name: &str,
+        op_stack: HandleOpStack<'_>,
+    ) -> Pin<Box<dyn Future<Output = Vec<StackValue>>>> {
+        if self.first.handles(name) {
+            return self.first.handle(name, op_stack);
+        }
+
+        if self.second.handles(name) {
+            return self.second.handle(name, op_stack);
+        }
+
+        Box::pin(async move { Vec::new() })
+    }
 }
 
 pub struct ExternalHandlerConstant<F> {
