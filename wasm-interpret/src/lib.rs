@@ -8,6 +8,9 @@ use alloc::{string::String, vec::Vec};
 mod leb128;
 use leb128::{parse_ileb128, parse_uleb128};
 
+mod indices;
+pub use indices::*;
+
 mod instruction;
 pub use instruction::*;
 
@@ -15,27 +18,6 @@ mod module;
 pub use module::Module;
 
 pub mod vm;
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct LocalId(u32);
-
-#[derive(Debug)]
-pub enum LocalIdError {
-    InvalidId,
-}
-
-impl Parseable for LocalId {
-    type Error = LocalIdError;
-
-    fn parse<I>(mut iter: I) -> Result<Self, Self::Error>
-    where
-        I: Iterator<Item = u8>,
-    {
-        let id: u32 = parse_uleb128(iter.by_ref()).ok_or(LocalIdError::InvalidId)?;
-
-        Ok(Self(id))
-    }
-}
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct FuncId(u32);
@@ -66,7 +48,7 @@ pub trait Parseable: Sized {
         I: Iterator<Item = u8>;
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Vector<C> {
     items: Vec<C>,
 }
@@ -164,6 +146,9 @@ impl Parseable for ResultType {
 #[derive(Debug, Clone)]
 pub enum ValueType {
     Number(NumberType),
+    Vector128,
+    FuncRef,
+    ExternRef,
 }
 
 #[derive(Debug)]
@@ -183,6 +168,10 @@ impl Parseable for ValueType {
 
         match byte {
             0x7f => Ok(Self::Number(NumberType::I32)),
+            0x7e => Ok(Self::Number(NumberType::I64)),
+            0x7b => Ok(Self::Vector128),
+            0x70 => Ok(Self::FuncRef),
+            0x6f => Ok(Self::ExternRef),
             other => Err(ValueTypeError::Unknown(other)),
         }
     }
@@ -192,29 +181,6 @@ impl Parseable for ValueType {
 pub enum NumberType {
     I32,
     I64,
-}
-
-#[derive(Debug)]
-pub struct TypeIndex(u32);
-
-#[derive(Debug)]
-pub enum TypeIndexError {
-    Missing,
-}
-
-impl Parseable for TypeIndex {
-    type Error = TypeIndexError;
-
-    fn parse<I>(iter: I) -> Result<Self, Self::Error>
-    where
-        I: Iterator<Item = u8>,
-    {
-        let mut peeked = iter.peekable();
-
-        let index = parse_uleb128(peeked.by_ref()).ok_or(TypeIndexError::Missing)?;
-
-        Ok(Self(index))
-    }
 }
 
 #[derive(Debug)]
@@ -491,27 +457,66 @@ impl Parseable for Table {
 }
 
 #[derive(Debug)]
-pub struct Global {}
+pub struct Global {
+    ty: GlobalType,
+    exp: Expression,
+}
 
 #[derive(Debug)]
-pub enum GlobalError {}
+pub enum GlobalError {
+    InvalidType(GlobalTypeError),
+    InvalidExpression(ExpressionError),
+}
 
 impl Parseable for Global {
     type Error = GlobalError;
 
-    fn parse<I>(_: I) -> Result<Self, Self::Error>
+    fn parse<I>(mut iter: I) -> Result<Self, Self::Error>
     where
         I: Iterator<Item = u8>,
     {
-        todo!("Parse Global")
+        let ty = GlobalType::parse(iter.by_ref()).map_err(GlobalError::InvalidType)?;
+        let exp = Expression::parse(iter.by_ref()).map_err(GlobalError::InvalidExpression)?;
+
+        Ok(Self { ty, exp })
     }
 }
 
 #[derive(Debug)]
-pub struct GlobalType {}
+pub struct GlobalType {
+    ty: ValueType,
+    mutable: bool,
+}
 
 #[derive(Debug)]
-pub enum GlobalTypeError {}
+pub enum GlobalTypeError {
+    InvalidValueType(ValueTypeError),
+    MissingMutability,
+    InvalidMutability(u8),
+}
+
+impl Parseable for GlobalType {
+    type Error = GlobalTypeError;
+
+    fn parse<I>(mut iter: I) -> Result<Self, Self::Error>
+    where
+        I: Iterator<Item = u8>,
+    {
+        let val_type =
+            ValueType::parse(iter.by_ref()).map_err(GlobalTypeError::InvalidValueType)?;
+        let raw_mut = iter.next().ok_or(GlobalTypeError::MissingMutability)?;
+        let mutable = match raw_mut {
+            0x00 => false,
+            0x01 => true,
+            other => return Err(GlobalTypeError::InvalidMutability(other)),
+        };
+
+        Ok(Self {
+            ty: val_type,
+            mutable,
+        })
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct Expression {
@@ -535,6 +540,7 @@ impl Parseable for Expression {
         let mut peekable = iter.peekable();
         while let Some(byte) = peekable.peek() {
             if *byte == 0x0b {
+                let _ = peekable.next();
                 break;
             }
 
@@ -710,8 +716,98 @@ impl Parseable for ImportDescription {
     }
 }
 
+#[derive(Debug, Clone)]
+pub enum Element {
+    Type1 {
+        func_ids: Vector<FuncId>,
+        offset: Expression,
+    },
+}
+
+#[derive(Debug)]
+pub enum ElementError {
+    MissingId,
+    InvalidId(u32),
+    InvalidExpression(ExpressionError),
+    InvalidFuncIds(VectorError<FuncIdError>),
+}
+
+impl Parseable for Element {
+    type Error = ElementError;
+
+    fn parse<I>(mut iter: I) -> Result<Self, Self::Error>
+    where
+        I: Iterator<Item = u8>,
+    {
+        let raw_id = parse_uleb128(iter.by_ref()).ok_or(ElementError::MissingId)?;
+
+        match raw_id {
+            0 => {
+                let exp =
+                    Expression::parse(iter.by_ref()).map_err(ElementError::InvalidExpression)?;
+
+                let func_ids: Vector<FuncId> =
+                    Vector::parse(iter.by_ref()).map_err(ElementError::InvalidFuncIds)?;
+
+                Ok(Self::Type1 {
+                    func_ids,
+                    offset: exp,
+                })
+            }
+            1 => todo!(),
+            2 => todo!(),
+            3 => todo!(),
+            4 => todo!(),
+            5 => todo!(),
+            6 => todo!(),
+            7 => todo!(),
+            other => Err(ElementError::InvalidId(other)),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub enum Data {
+    Variant0(Expression, Vector<Byte>),
+    Variant1,
+    Variant2,
+}
+
+#[derive(Debug)]
+pub enum DataError {
+    InvalidVariant,
+    UnknownVariant(u32),
+    InvalidExpression(ExpressionError),
+    InvalidBytes(VectorError<ByteError>),
+}
+
+impl Parseable for Data {
+    type Error = DataError;
+
+    fn parse<I>(mut iter: I) -> Result<Self, Self::Error>
+    where
+        I: Iterator<Item = u8>,
+    {
+        let variant_ident: u32 = parse_uleb128(iter.by_ref()).ok_or(DataError::InvalidVariant)?;
+
+        match variant_ident {
+            0 => {
+                let exp = Expression::parse(iter.by_ref()).map_err(DataError::InvalidExpression)?;
+                let bytes: Vector<Byte> =
+                    Vector::parse(iter.by_ref()).map_err(DataError::InvalidBytes)?;
+
+                Ok(Self::Variant0(exp, bytes))
+            }
+            1 => todo!("Variant 1"),
+            2 => todo!("Variant 2"),
+            other => Err(DataError::UnknownVariant(other)),
+        }
+    }
+}
+
 #[derive(Debug)]
 pub enum Section {
+    Custom(Name, Vec<u8>),
     TypeSection(Vector<FunctionType>),
     ImportSection(Vector<Import>),
     FunctionSection(Vector<TypeIndex>),
@@ -719,11 +815,14 @@ pub enum Section {
     MemorySection(Vector<Memory>),
     GlobalSection(Vector<Global>),
     ExportSection(Vector<Export>),
+    ElementSection(Vector<Element>),
     CodeSection(Vector<Code>),
+    DataSection(Vector<Data>),
 }
 
 #[derive(Debug)]
 pub enum SectionError {
+    CustomSection(NameError),
     TypeSection(VectorError<FunctionTypeError>),
     ImportSection(VectorError<ImportError>),
     FunctionSection(VectorError<TypeIndexError>),
@@ -731,7 +830,9 @@ pub enum SectionError {
     MemorySection(VectorError<MemoryError>),
     GlobalSection(VectorError<GlobalError>),
     ExportSection(VectorError<ExportError>),
+    ElementSection(VectorError<ElementError>),
     CodeSection(VectorError<CodeError>),
+    DataSection(VectorError<DataError>),
     Unknown(u8),
 }
 
@@ -742,9 +843,11 @@ impl Section {
     {
         match byte {
             0x0 => {
-                // println!("Custom Section");
+                let name =
+                    Name::parse(content_iter.by_ref()).map_err(SectionError::CustomSection)?;
+                let raw = content_iter.collect::<Vec<_>>();
 
-                todo!()
+                Ok(Self::Custom(name, raw))
             }
             0x1 => {
                 let vec: Vector<FunctionType> =
@@ -788,11 +891,23 @@ impl Section {
 
                 Ok(Section::ExportSection(exports))
             }
+            0x9 => {
+                let elem_entries: Vector<Element> =
+                    Vector::parse(content_iter.by_ref()).map_err(SectionError::ElementSection)?;
+
+                Ok(Self::ElementSection(elem_entries))
+            }
             0xa => {
                 let code_entries: Vector<Code> =
                     Vector::parse(content_iter.by_ref()).map_err(SectionError::CodeSection)?;
 
                 Ok(Section::CodeSection(code_entries))
+            }
+            0xb => {
+                let data_entries: Vector<Data> =
+                    Vector::parse(content_iter.by_ref()).map_err(SectionError::DataSection)?;
+
+                Ok(Section::DataSection(data_entries))
             }
             other => Err(SectionError::Unknown(other)),
         }

@@ -1,4 +1,7 @@
-use crate::{leb128::parse_uleb128, Export, Import, Section, SectionError};
+use crate::{
+    leb128::parse_uleb128, Code, Element, Export, FunctionType, Global, Import, Section,
+    SectionError, Table,
+};
 
 use alloc::vec::Vec;
 
@@ -66,5 +69,54 @@ impl Module {
                 _ => None,
             })
             .flat_map(|e| e.items.iter())
+    }
+
+    pub fn tables(&self) -> impl Iterator<Item = &Table> + '_ {
+        self.sections
+            .iter()
+            .filter_map(|s| match s {
+                Section::TableSection(ts) => Some(ts),
+                _ => None,
+            })
+            .flat_map(|ts| ts.items.iter())
+    }
+
+    pub fn elements(&self) -> impl Iterator<Item = &Element> + '_ {
+        self.sections
+            .iter()
+            .filter_map(|sect| match sect {
+                Section::ElementSection(es) => Some(es),
+                _ => None,
+            })
+            .flat_map(|ts| ts.items.iter())
+    }
+
+    pub fn functions(&self) -> impl Iterator<Item = &Code> + '_ {
+        self.sections
+            .iter()
+            .filter_map(|sect| match sect {
+                Section::CodeSection(cs) => Some(cs),
+                _ => None,
+            })
+            .flat_map(|cs| cs.items.iter())
+    }
+    pub fn function_types(&self) -> impl Iterator<Item = &FunctionType> + '_ {
+        self.sections
+            .iter()
+            .filter_map(|sect| match sect {
+                Section::TypeSection(ts) => Some(ts),
+                _ => None,
+            })
+            .flat_map(|ts| ts.items.iter())
+    }
+
+    pub fn globals(&self) -> impl Iterator<Item = &Global> + '_ {
+        self.sections
+            .iter()
+            .filter_map(|sect| match sect {
+                Section::GlobalSection(gs) => Some(gs),
+                _ => None,
+            })
+            .flat_map(|gs| gs.items.iter())
     }
 }

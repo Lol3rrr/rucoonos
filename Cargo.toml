@@ -10,6 +10,7 @@ members = [
     "boot",
     "kernel",
     "wasm-interpret",
+    "wasm-programs/*"
 ]
 
 [dependencies]

@@ -51,7 +51,7 @@ fn kernel_main(boot_info: &'static mut bootloader::BootInfo) -> ! {
                 result
             })
         }),
-        include_bytes!("../wasm-interpret/tests/extern_func.wasm"),
+        include_bytes!("../target/wasm32-wasi/debug/hello-world.wasm"),
         "main",
     ));
 

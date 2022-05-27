@@ -1,10 +1,15 @@
 use core::{future::Future, pin::Pin};
 
-use alloc::{boxed::Box, collections::BTreeMap, string::String, vec::Vec};
+use alloc::{
+    boxed::Box,
+    collections::{BTreeMap, BTreeSet},
+    string::String,
+    vec::Vec,
+};
 
 use crate::{
     ExportDescription, Func, FuncId, FunctionType, ImportDescription, Instruction, IntegerVariant,
-    LocalId, MemArg, Module, NumberType, Section, ValueType,
+    LocalIndex, MemArg, Module, NumberType, Section, ValueType,
 };
 
 use self::handler::ExternalHandler;
@@ -35,25 +40,32 @@ impl<EH> Environment<EH> {
 }
 
 pub struct Interpreter<'m, EH> {
+    module: &'m Module,
     env: Environment<EH>,
     func_names: BTreeMap<String, u32>,
     imported_funcs: BTreeMap<u32, String>,
     functions: BTreeMap<u32, Function<'m>>,
 
-    exec_state: State,
+    exec_state: State<'m>,
 }
 
 #[derive(Debug, PartialEq)]
 pub enum RunErrorType {
+    UnknownInitialFunction(String, FuncId),
+    UnknownInstruction(Instruction),
     UnknownFuncName(String),
     UnknownFunc(FuncId),
-    UnknownLocal(LocalId),
+    UnknownExternalFunc(FuncId),
+    UnhandledExternal(String),
+    UnknownLocal(LocalIndex),
     MismatchedTypes,
     Other,
 }
 
 #[derive(Debug, PartialEq)]
-pub struct RunErrorContext {}
+pub struct RunErrorContext {
+    instruction: Option<Instruction>,
+}
 
 #[derive(Debug, PartialEq)]
 pub struct RunError {
@@ -71,52 +83,45 @@ where
     EH: ExternalHandler,
 {
     pub fn new(env: Environment<EH>, module: &'m Module) -> Self {
-        let func_types = module
-            .sections()
-            .filter_map(|sect| match sect {
-                Section::TypeSection(t) => Some(t),
+        let functions = {
+            let import_func_iter = module.imports().filter_map(|imp| match &imp.d {
+                ImportDescription::Function(index) => Some((imp, index)),
                 _ => None,
-            })
-            .flat_map(|t| t.items.iter());
+            });
+            let imported_func_map: BTreeMap<u32, Function<'m>> = import_func_iter
+                .map(|(imp, d)| (d.0, Function::External))
+                .collect();
 
-        let imported_funcs = module
-            .sections()
-            .filter_map(|sect| match sect {
-                Section::ImportSection(s) => Some(s),
-                _ => None,
-            })
-            .flat_map(|s| s.items.iter())
-            .filter_map(|imp| match &imp.d {
-                ImportDescription::Function(f) => Some(f),
-                _ => None,
-            })
-            .map(|imp| (imp.0, Function::External))
-            .collect::<BTreeMap<_, _>>();
+            let func_iter = module
+                .sections()
+                .filter_map(|sect| match sect {
+                    Section::FunctionSection(fs) => Some(fs),
+                    _ => None,
+                })
+                .flat_map(|s| s.items.iter());
 
-        let mut index: u32 = 0;
-        let code_sections: BTreeMap<u32, Function> = module
-            .sections()
-            .filter_map(|sec| match sec {
-                Section::CodeSection(c) => Some(c),
-                _ => None,
-            })
-            .flat_map(|e| e.items.iter())
-            .zip(func_types)
-            .zip(core::iter::from_fn(|| {
-                while imported_funcs.contains_key(&index) {
+            let func_types: Vec<_> = module.function_types().collect();
+
+            let mut index = 0;
+            let defined_func_iter = module.functions().zip(func_iter).map(|(func, f_type)| {
+                while imported_func_map.contains_key(&index) {
                     index += 1;
                 }
+                let c_index = index;
                 index += 1;
-                Some(index - 1)
-            }))
-            .map(|((c, ft), index)| (index, Function::Internal(&c.code, ft)))
-            .collect();
 
-        let functions = {
+                let f_type = match func_types.get(f_type.0 as usize) {
+                    Some(ft) => ft,
+                    None => todo!(),
+                };
+
+                (c_index, Function::Internal(&func.code, f_type))
+            });
+            let defined_func_map: BTreeMap<u32, Function<'m>> = defined_func_iter.collect();
+
             let mut tmp = BTreeMap::new();
-
-            tmp.extend(imported_funcs);
-            tmp.extend(code_sections);
+            tmp.extend(imported_func_map);
+            tmp.extend(defined_func_map);
 
             tmp
         };
@@ -144,12 +149,13 @@ where
             .collect::<BTreeMap<_, _>>();
 
         Self {
+            module,
             env,
             functions,
             func_names: exported_func,
             imported_funcs,
 
-            exec_state: State::new(0, Vec::new()),
+            exec_state: State::new(0, Vec::new(), core::iter::empty()),
         }
     }
 
@@ -171,7 +177,7 @@ where
                 core::iter::repeat_with(move || match ty {
                     ValueType::Number(NumberType::I32) => StackValue::I32(0),
                     ValueType::Number(NumberType::I64) => StackValue::I64(0),
-                    _ => todo!(),
+                    _ => todo!("Unexpected Local Type"),
                 })
                 .take(n)
             })
@@ -188,15 +194,15 @@ where
     {
         let func_id = self.func_names.get(name).copied().ok_or_else(|| RunError {
             err: RunErrorType::UnknownFuncName(String::from(name)),
-            ctx: RunErrorContext {},
+            ctx: RunErrorContext { instruction: None },
         })?;
 
         let func = match self.functions.get(&func_id) {
             Some(func) => func,
             None => {
                 return Err(RunError {
-                    err: RunErrorType::UnknownFunc(FuncId(func_id)),
-                    ctx: RunErrorContext {},
+                    err: RunErrorType::UnknownInitialFunction(String::from(name), FuncId(func_id)),
+                    ctx: RunErrorContext { instruction: None },
                 })
             }
         };
@@ -206,17 +212,34 @@ where
             Function::External => {
                 return Err(RunError {
                     err: RunErrorType::Other,
-                    ctx: RunErrorContext {},
+                    ctx: RunErrorContext { instruction: None },
                 })
             }
         };
 
-        self.exec_state = State::new(func_id, self.locals(func));
+        let globals_iter = {
+            let raw_globals = self.module.globals();
+
+            let last_global_import = self
+                .module
+                .imports()
+                .filter(|exp| matches!(exp.d, ImportDescription::Global(_)))
+                .count() as u32;
+
+            ((last_global_import.saturating_sub(1))..).zip(raw_globals)
+        };
+
+        self.exec_state = State::new(func_id, self.locals(func), globals_iter);
 
         'outer: loop {
             let func = match self.functions.get(&self.exec_state.func) {
                 Some(func) => func,
-                None => todo!("Unknown Function"),
+                None => {
+                    return Err(RunError {
+                        err: RunErrorType::Other,
+                        ctx: RunErrorContext { instruction: None },
+                    })
+                }
             };
 
             let func = match func {
@@ -224,14 +247,14 @@ where
                 Function::External => {
                     return Err(RunError {
                         err: RunErrorType::Other,
-                        ctx: RunErrorContext {},
+                        ctx: RunErrorContext { instruction: None },
                     })
                 }
             };
 
-            let instructions = func.0.exp.instructions.iter().skip(self.exec_state.pc);
+            let mut instructions = func.0.exp.instructions.iter().skip(self.exec_state.pc);
 
-            for instr in instructions {
+            while let Some(instr) = instructions.next() {
                 self.exec_state.pc += 1;
 
                 // If we want to wait for something
@@ -249,7 +272,9 @@ where
                             _ => {
                                 return Err(RunError {
                                     err: RunErrorType::MismatchedTypes,
-                                    ctx: RunErrorContext {},
+                                    ctx: RunErrorContext {
+                                        instruction: Some(instr.clone()),
+                                    },
                                 })
                             }
                         };
@@ -267,13 +292,15 @@ where
                         let value = i32::from_le_bytes(raw_value);
                         self.exec_state.op_stack.push(StackValue::I32(value));
                     }
-                    Instruction::StoreI32(MemArg { offset, .. }) => {
+                    Instruction::StoreI32(MemArg { offset, .. }, ws) => {
                         let value = match self.exec_state.op_stack.pop() {
                             Some(StackValue::I32(v)) => v,
                             _ => {
                                 return Err(RunError {
                                     err: RunErrorType::MismatchedTypes,
-                                    ctx: RunErrorContext {},
+                                    ctx: RunErrorContext {
+                                        instruction: Some(instr.clone()),
+                                    },
                                 })
                             }
                         };
@@ -283,13 +310,15 @@ where
                             _ => {
                                 return Err(RunError {
                                     err: RunErrorType::MismatchedTypes,
-                                    ctx: RunErrorContext {},
+                                    ctx: RunErrorContext {
+                                        instruction: Some(instr.clone()),
+                                    },
                                 })
                             }
                         };
 
                         let address = dyn_address as u32 + *offset;
-                        let address_end = address + 4;
+                        let address_end = address + (*ws as u32);
 
                         if self.env.memory.len() < address_end as usize {
                             self.env.memory.resize(address_end as usize, 0);
@@ -299,7 +328,7 @@ where
 
                         let value = i32::to_le_bytes(value);
 
-                        target.copy_from_slice(&value);
+                        target.copy_from_slice(&value[..*ws]);
                     }
                     Instruction::SubI(variant) => {
                         match variant {
@@ -309,7 +338,9 @@ where
                                     _ => {
                                         return Err(RunError {
                                             err: RunErrorType::MismatchedTypes,
-                                            ctx: RunErrorContext {},
+                                            ctx: RunErrorContext {
+                                                instruction: Some(instr.clone()),
+                                            },
                                         })
                                     }
                                 };
@@ -318,7 +349,9 @@ where
                                     _ => {
                                         return Err(RunError {
                                             err: RunErrorType::MismatchedTypes,
-                                            ctx: RunErrorContext {},
+                                            ctx: RunErrorContext {
+                                                instruction: Some(instr.clone()),
+                                            },
                                         })
                                     }
                                 };
@@ -328,7 +361,12 @@ where
                                     .push(StackValue::I32(first - second));
                             }
                             IntegerVariant::I64 => {
-                                todo!("Sub I64")
+                                return Err(RunError {
+                                    err: RunErrorType::Other,
+                                    ctx: RunErrorContext {
+                                        instruction: Some(instr.clone()),
+                                    },
+                                })
                             }
                         };
                     }
@@ -340,7 +378,9 @@ where
                                     _ => {
                                         return Err(RunError {
                                             err: RunErrorType::MismatchedTypes,
-                                            ctx: RunErrorContext {},
+                                            ctx: RunErrorContext {
+                                                instruction: Some(instr.clone()),
+                                            },
                                         })
                                     }
                                 };
@@ -349,7 +389,9 @@ where
                                     _ => {
                                         return Err(RunError {
                                             err: RunErrorType::MismatchedTypes,
-                                            ctx: RunErrorContext {},
+                                            ctx: RunErrorContext {
+                                                instruction: Some(instr.clone()),
+                                            },
                                         })
                                     }
                                 };
@@ -359,7 +401,12 @@ where
                                     .push(StackValue::I32(first + second));
                             }
                             IntegerVariant::I64 => {
-                                todo!("Sub I64")
+                                return Err(RunError {
+                                    err: RunErrorType::Other,
+                                    ctx: RunErrorContext {
+                                        instruction: Some(instr.clone()),
+                                    },
+                                })
                             }
                         };
                     }
@@ -369,7 +416,9 @@ where
                             None => {
                                 return Err(RunError {
                                     err: RunErrorType::UnknownLocal(id.clone()),
-                                    ctx: RunErrorContext {},
+                                    ctx: RunErrorContext {
+                                        instruction: Some(instr.clone()),
+                                    },
                                 })
                             }
                         };
@@ -382,7 +431,9 @@ where
                             None => {
                                 return Err(RunError {
                                     err: RunErrorType::Other,
-                                    ctx: RunErrorContext {},
+                                    ctx: RunErrorContext {
+                                        instruction: Some(instr.clone()),
+                                    },
                                 })
                             }
                         };
@@ -392,7 +443,9 @@ where
                             None => {
                                 return Err(RunError {
                                     err: RunErrorType::UnknownLocal(id.clone()),
-                                    ctx: RunErrorContext {},
+                                    ctx: RunErrorContext {
+                                        instruction: Some(instr.clone()),
+                                    },
                                 })
                             }
                         };
@@ -404,7 +457,9 @@ where
                             _ => {
                                 return Err(RunError {
                                     err: RunErrorType::MismatchedTypes,
-                                    ctx: RunErrorContext {},
+                                    ctx: RunErrorContext {
+                                        instruction: Some(instr.clone()),
+                                    },
                                 })
                             }
                         };
@@ -415,7 +470,9 @@ where
                             None => {
                                 return Err(RunError {
                                     err: RunErrorType::Other,
-                                    ctx: RunErrorContext {},
+                                    ctx: RunErrorContext {
+                                        instruction: Some(instr.clone()),
+                                    },
                                 })
                             }
                         };
@@ -425,7 +482,9 @@ where
                             None => {
                                 return Err(RunError {
                                     err: RunErrorType::UnknownLocal(id.clone()),
-                                    ctx: RunErrorContext {},
+                                    ctx: RunErrorContext {
+                                        instruction: Some(instr.clone()),
+                                    },
                                 })
                             }
                         };
@@ -437,7 +496,63 @@ where
                             _ => {
                                 return Err(RunError {
                                     err: RunErrorType::MismatchedTypes,
-                                    ctx: RunErrorContext {},
+                                    ctx: RunErrorContext {
+                                        instruction: Some(instr.clone()),
+                                    },
+                                })
+                            }
+                        };
+                    }
+                    Instruction::GlobalGet(gid) => {
+                        let value = match self.exec_state.get_global(gid.0) {
+                            Some(v) => v,
+                            None => {
+                                return Err(RunError {
+                                    err: RunErrorType::Other,
+                                    ctx: RunErrorContext {
+                                        instruction: Some(instr.clone()),
+                                    },
+                                })
+                            }
+                        };
+
+                        self.exec_state.op_stack.push(value.clone());
+                    }
+                    Instruction::GlobalSet(gid) => {
+                        let value = match self.exec_state.op_stack.pop() {
+                            Some(v) => v,
+                            None => {
+                                return Err(RunError {
+                                    err: RunErrorType::Other,
+                                    ctx: RunErrorContext {
+                                        instruction: Some(instr.clone()),
+                                    },
+                                })
+                            }
+                        };
+
+                        let target_var = match self.exec_state.get_global_mut(gid.0) {
+                            Some(t) => t,
+                            None => {
+                                return Err(RunError {
+                                    err: RunErrorType::Other,
+                                    ctx: RunErrorContext {
+                                        instruction: Some(instr.clone()),
+                                    },
+                                })
+                            }
+                        };
+
+                        match (target_var, value) {
+                            (StackValue::I32(g_var), StackValue::I32(val)) => {
+                                *g_var = val;
+                            }
+                            other => {
+                                return Err(RunError {
+                                    err: RunErrorType::MismatchedTypes,
+                                    ctx: RunErrorContext {
+                                        instruction: Some(instr.clone()),
+                                    },
                                 })
                             }
                         };
@@ -452,11 +567,23 @@ where
                             Some(Function::External) => {
                                 let name = match self.imported_funcs.get(&cid.0) {
                                     Some(n) => n,
-                                    None => todo!("Unknown External Function {:?}", cid),
+                                    None => {
+                                        return Err(RunError {
+                                            err: RunErrorType::UnknownExternalFunc(cid.clone()),
+                                            ctx: RunErrorContext {
+                                                instruction: Some(instr.clone()),
+                                            },
+                                        })
+                                    }
                                 };
 
                                 if !self.env.external_handler.handles(name) {
-                                    todo!("Handler does not handle called External Function")
+                                    return Err(RunError {
+                                        err: RunErrorType::UnhandledExternal(name.clone()),
+                                        ctx: RunErrorContext {
+                                            instruction: Some(instr.clone()),
+                                        },
+                                    });
                                 }
 
                                 // TODO
@@ -471,12 +598,29 @@ where
                                     self.exec_state.op_stack.push(val);
                                 }
                             }
-                            None => todo!("Unknown Function"),
+                            None => {
+                                return Err(RunError {
+                                    err: RunErrorType::UnknownFunc(cid.clone()),
+                                    ctx: RunErrorContext {
+                                        instruction: Some(instr.clone()),
+                                    },
+                                })
+                            }
                         };
 
                         continue 'outer;
                     }
-                    other => todo!("Execute Instruction: {:?}", other),
+                    Instruction::Block(type_index, b_instr) => {
+                        todo!("Type Index {:?}", type_index)
+                    }
+                    other => {
+                        return Err(RunError {
+                            err: RunErrorType::UnknownInstruction(other.clone()),
+                            ctx: RunErrorContext {
+                                instruction: Some(instr.clone()),
+                            },
+                        })
+                    }
                 };
             }
 
@@ -489,7 +633,7 @@ where
 
         self.exec_state.op_stack.pop().ok_or(RunError {
             err: RunErrorType::Other,
-            ctx: RunErrorContext {},
+            ctx: RunErrorContext { instruction: None },
         })
     }
 }

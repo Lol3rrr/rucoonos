@@ -1,21 +1,25 @@
+use alloc::{boxed::Box, vec::Vec};
+
 use crate::{
     leb128::{parse_ileb128, parse_uleb128},
-    FuncId, FuncIdError, LocalId, LocalIdError, Parseable,
+    FuncId, FuncIdError, GlobalIndex, GlobalIndexError, LabelIndex, LabelIndexError, LocalIndex,
+    LocalIndexError, Parseable, TableIndex, TableIndexError, TypeIndex, TypeIndexError, Vector,
+    VectorError,
 };
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum IntegerVariant {
     I32,
     I64,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum FloatVariant {
     F32,
     F64,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct MemArg {
     pub align: u32,
     pub offset: u32,
@@ -41,23 +45,53 @@ impl Parseable for MemArg {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Instruction {
+    Unreachable,
+    Nop,
+    Block(TypeIndex, Vec<Self>),
+    Loop(TypeIndex, Vec<Self>),
+    Branch(LabelIndex),
+    BranchConditional(LabelIndex),
+    BranchTable(Vector<LabelIndex>, LabelIndex),
+    Return,
     Call(FuncId),
+    CallIndirect(TableIndex, TypeIndex),
+
     //
-    LocalGet(LocalId),
-    LocalSet(LocalId),
-    LocalTee(LocalId),
+    Drop,
+    Select,
+
+    //
+    LocalGet(LocalIndex),
+    LocalSet(LocalIndex),
+    LocalTee(LocalIndex),
+    GlobalGet(GlobalIndex),
+    GlobalSet(GlobalIndex),
     //
     LoadI32(MemArg),
+    LoadI32_8S(MemArg),
+    LoadI32_8U(MemArg),
+    LoadI32_16S(MemArg),
+    LoadI32_16U(MemArg),
     LoadI64(MemArg),
+    LoadI64_8S(MemArg),
+    LoadI64_8U(MemArg),
+    LoadI64_16S(MemArg),
+    LoadI64_16U(MemArg),
+    LoadI64_32S(MemArg),
+    LoadI64_32U(MemArg),
     LoadF32(MemArg),
     LoadF64(MemArg),
     //
-    StoreI32(MemArg),
-    StoreI64(MemArg),
+    StoreI32(MemArg, usize),
+    StoreI64(MemArg, usize),
     StoreF32(MemArg),
     StoreF64(MemArg),
+
+    //
+    MemorySize,
+    MemoryGrow,
 
     //
     ConstantI32(i32),
@@ -100,6 +134,11 @@ pub enum Instruction {
     ShrUI(IntegerVariant),
     RotlI(IntegerVariant),
     RotrI(IntegerVariant),
+
+    //
+    WrapI32I64,
+    ExtendI64I32U,
+    ExtendI64I32S,
 }
 
 #[derive(Debug)]
@@ -109,7 +148,13 @@ pub enum InstructionError {
     InvalidOperand,
     InvalidMemArg(MemArgError),
     InvalidFuncId(FuncIdError),
-    InvalidLocalId(LocalIdError),
+    InvalidLocalIndex(LocalIndexError),
+    InvalodGlobalIndex(GlobalIndexError),
+    InvalidTypeIndex(TypeIndexError),
+    InvalidInstruction(Box<InstructionError>),
+    InvalidLabelIndex(LabelIndexError),
+    InvalidLabelIndices(VectorError<LabelIndexError>),
+    InvalidTableIndex(TableIndexError),
 }
 
 impl Parseable for Instruction {
@@ -122,27 +167,108 @@ impl Parseable for Instruction {
         let instr_ty = iter.next().ok_or(InstructionError::MissingInstruction)?;
 
         match instr_ty {
+            0x00 => Ok(Self::Unreachable),
+            0x01 => Ok(Self::Nop),
+            0x02 => {
+                let block_type =
+                    TypeIndex::parse(iter.by_ref()).map_err(InstructionError::InvalidTypeIndex)?;
+
+                let mut instructions = Vec::new();
+                let mut peekable = iter.peekable();
+                while let Some(byte) = peekable.peek() {
+                    if *byte == 0x0b {
+                        let _ = peekable.next();
+                        break;
+                    }
+
+                    let instr =
+                        Self::parse(Box::new(peekable.by_ref()) as Box<dyn Iterator<Item = u8>>)
+                            .map_err(|e| InstructionError::InvalidInstruction(Box::new(e)))?;
+                    instructions.push(instr);
+                }
+
+                Ok(Self::Block(block_type, instructions))
+            }
+            0x03 => {
+                let block_type =
+                    TypeIndex::parse(iter.by_ref()).map_err(InstructionError::InvalidTypeIndex)?;
+
+                let mut instructions = Vec::new();
+                let mut peekable = iter.peekable();
+                while let Some(byte) = peekable.peek() {
+                    if *byte == 0x0b {
+                        let _ = peekable.next();
+                        break;
+                    }
+
+                    let instr =
+                        Self::parse(Box::new(peekable.by_ref()) as Box<dyn Iterator<Item = u8>>)
+                            .map_err(|e| InstructionError::InvalidInstruction(Box::new(e)))?;
+                    instructions.push(instr);
+                }
+
+                Ok(Self::Loop(block_type, instructions))
+            }
+            0x0c => {
+                let lindex = LabelIndex::parse(iter.by_ref())
+                    .map_err(InstructionError::InvalidLabelIndex)?;
+
+                Ok(Self::Branch(lindex))
+            }
+            0x0d => {
+                let lindex = LabelIndex::parse(iter.by_ref())
+                    .map_err(InstructionError::InvalidLabelIndex)?;
+
+                Ok(Self::BranchConditional(lindex))
+            }
+            0x0e => {
+                let lindicies: Vector<LabelIndex> =
+                    Vector::parse(iter.by_ref()).map_err(InstructionError::InvalidLabelIndices)?;
+                let lindex = LabelIndex::parse(iter.by_ref())
+                    .map_err(InstructionError::InvalidLabelIndex)?;
+
+                Ok(Self::BranchTable(lindicies, lindex))
+            }
+            0x0f => Ok(Self::Return),
             0x10 => {
                 let id = FuncId::parse(iter.by_ref()).map_err(InstructionError::InvalidFuncId)?;
                 Ok(Self::Call(id))
             }
+            0x11 => {
+                let taid = TableIndex::parse(iter.by_ref())
+                    .map_err(InstructionError::InvalidTableIndex)?;
+                let tyid =
+                    TypeIndex::parse(iter.by_ref()).map_err(InstructionError::InvalidTypeIndex)?;
+                Ok(Self::CallIndirect(taid, tyid))
+            }
+            //
+            0x1a => Ok(Self::Drop),
+            0x1b => Ok(Self::Select),
+            //
             0x20 => {
-                let id = LocalId::parse(iter.by_ref()).map_err(InstructionError::InvalidLocalId)?;
+                let id = LocalIndex::parse(iter.by_ref())
+                    .map_err(InstructionError::InvalidLocalIndex)?;
                 Ok(Self::LocalGet(id))
             }
             0x21 => {
-                let id = LocalId::parse(iter.by_ref()).map_err(InstructionError::InvalidLocalId)?;
+                let id = LocalIndex::parse(iter.by_ref())
+                    .map_err(InstructionError::InvalidLocalIndex)?;
                 Ok(Self::LocalSet(id))
             }
             0x22 => {
-                let id = LocalId::parse(iter.by_ref()).map_err(InstructionError::InvalidLocalId)?;
+                let id = LocalIndex::parse(iter.by_ref())
+                    .map_err(InstructionError::InvalidLocalIndex)?;
                 Ok(Self::LocalTee(id))
             }
             0x23 => {
-                todo!("Global Get")
+                let id = GlobalIndex::parse(iter.by_ref())
+                    .map_err(InstructionError::InvalodGlobalIndex)?;
+                Ok(Self::GlobalGet(id))
             }
             0x24 => {
-                todo!("Global Set")
+                let id = GlobalIndex::parse(iter.by_ref())
+                    .map_err(InstructionError::InvalodGlobalIndex)?;
+                Ok(Self::GlobalSet(id))
             }
             mem_instr if (0x28..=0x3e).contains(&mem_instr) => {
                 let arg = MemArg::parse(iter.by_ref()).map_err(InstructionError::InvalidMemArg)?;
@@ -152,15 +278,36 @@ impl Parseable for Instruction {
                     0x29 => Self::LoadI64(arg),
                     0x2a => Self::LoadF32(arg),
                     0x2b => Self::LoadF64(arg),
+                    0x2c => Self::LoadI32_8S(arg),
+                    0x2d => Self::LoadI32_8U(arg),
+                    0x2e => Self::LoadI32_16S(arg),
+                    0x2f => Self::LoadI32_16U(arg),
+                    0x30 => Self::LoadI64_8S(arg),
+                    0x31 => Self::LoadI64_8U(arg),
+                    0x32 => Self::LoadI64_16S(arg),
+                    0x33 => Self::LoadI64_16U(arg),
+                    0x34 => Self::LoadI64_32S(arg),
+                    0x35 => Self::LoadI64_32U(arg),
                     //
-                    0x36 => Self::StoreI32(arg),
-                    0x37 => Self::StoreI64(arg),
+                    0x36 => Self::StoreI32(arg, 4),
+                    0x37 => Self::StoreI64(arg, 8),
                     0x38 => Self::StoreF32(arg),
                     0x39 => Self::StoreF64(arg),
-                    _ => unreachable!(),
+                    0x3a => Self::StoreI32(arg, 1),
+                    0x3b => Self::StoreI32(arg, 2),
+                    0x3c => Self::StoreI64(arg, 1),
+                    0x3d => Self::StoreI64(arg, 2),
+                    0x3e => Self::StoreI64(arg, 4),
+                    other => todo!("Unknown 0x{:x}", other),
                 };
                 Ok(instr)
             }
+
+            //
+            0x3f => Ok(Self::MemorySize),
+            0x40 => Ok(Self::MemoryGrow),
+
+            //
             0x41 => {
                 let con = parse_ileb128(iter.by_ref()).ok_or(InstructionError::InvalidOperand)?;
                 Ok(Self::ConstantI32(con))
@@ -251,6 +398,11 @@ impl Parseable for Instruction {
             0x88 => Ok(Self::ShrUI(IntegerVariant::I64)),
             0x89 => Ok(Self::RotlI(IntegerVariant::I64)),
             0x8a => Ok(Self::RotrI(IntegerVariant::I64)),
+            //
+            0xa7 => Ok(Self::WrapI32I64),
+            0xac => Ok(Self::ExtendI64I32S),
+            0xad => Ok(Self::ExtendI64I32U),
+            //
             other => Err(InstructionError::UnknownInstruction(other)),
         }
     }
