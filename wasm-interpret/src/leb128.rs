@@ -49,8 +49,8 @@ where
     let mut byte;
     loop {
         byte = bytes.next()?;
-        let byte_r: R = byte.into();
-        result |= (byte_r & 0x7fu8.into()) << shift;
+        let low_order_bit: R = (byte & 0x7f).into();
+        result |= low_order_bit << shift;
         shift += 7;
 
         if byte & 0x80 == 0 {
@@ -58,7 +58,7 @@ where
         }
     }
 
-    if shift < size && byte & 0x80 != 0 {
+    if shift < size && byte & 0x40 != 0 {
         result |= !R::default() << shift;
     }
 
@@ -73,5 +73,19 @@ impl SignedLeb128 for i32 {
 impl SignedLeb128 for i64 {
     fn bits() -> i32 {
         64
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn simple() {
+        let bytes = [0xC0, 0xBB, 0x78];
+
+        let result: i32 = parse_ileb128(bytes.into_iter()).unwrap();
+
+        assert_eq!(-123456, result);
     }
 }

@@ -2,7 +2,7 @@ use core::{future::Future, pin::Pin};
 
 use alloc::{boxed::Box, vec::Vec};
 
-use super::{HandleOpStack, StackValue};
+use super::{HandleMemory, HandleOpStack, StackValue};
 
 /// A Handler represents a way to provide external Functions to a WASM environment
 pub trait ExternalHandler: Sized {
@@ -15,6 +15,7 @@ pub trait ExternalHandler: Sized {
         &mut self,
         name: &str,
         op_stack: HandleOpStack<'_>,
+        mem: HandleMemory<'_>,
     ) -> Pin<Box<dyn Future<Output = Vec<StackValue>>>>;
 
     fn switch<S>(self, sw: S) -> ExternalHandlerSwitch<S, Self>
@@ -59,6 +60,7 @@ impl ExternalHandler for ExternalHandlerEmpty {
         &mut self,
         _: &str,
         _: HandleOpStack<'_>,
+        _: HandleMemory<'_>,
     ) -> Pin<Box<dyn Future<Output = Vec<StackValue>>>> {
         Box::pin(async move { Vec::new() })
     }
@@ -87,13 +89,14 @@ where
         &mut self,
         name: &str,
         op_stack: HandleOpStack<'_>,
+        mem: HandleMemory<'_>,
     ) -> Pin<Box<dyn Future<Output = Vec<StackValue>>>> {
         if self.first.handles(name) {
-            return self.first.handle(name, op_stack);
+            return self.first.handle(name, op_stack, mem);
         }
 
         if self.second.handles(name) {
-            return self.second.handle(name, op_stack);
+            return self.second.handle(name, op_stack, mem);
         }
 
         Box::pin(async move { Vec::new() })
@@ -106,7 +109,7 @@ pub struct ExternalHandlerConstant<F> {
 }
 impl<F, FF> ExternalHandlerConstant<F>
 where
-    F: FnMut(HandleOpStack<'_>) -> FF,
+    F: FnMut(HandleOpStack<'_>, HandleMemory<'_>) -> FF,
     FF: Future<Output = Vec<StackValue>> + 'static,
 {
     pub fn new(name: &'static str, func: F) -> Self {
@@ -115,7 +118,7 @@ where
 }
 impl<F, FF> ExternalHandler for ExternalHandlerConstant<F>
 where
-    F: FnMut(HandleOpStack<'_>) -> FF,
+    F: FnMut(HandleOpStack<'_>, HandleMemory<'_>) -> FF,
     FF: Future<Output = Vec<StackValue>> + 'static,
 {
     fn handles(&self, name: &str) -> bool {
@@ -126,8 +129,9 @@ where
         &mut self,
         _: &str,
         op_stack: HandleOpStack<'_>,
+        mem: HandleMemory<'_>,
     ) -> Pin<Box<dyn Future<Output = Vec<StackValue>>>> {
-        let result = (self.func)(op_stack);
+        let result = (self.func)(op_stack, mem);
         Box::pin(result)
     }
 }

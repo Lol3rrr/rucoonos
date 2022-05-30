@@ -44,15 +44,15 @@ fn kernel_main(boot_info: &'static mut bootloader::BootInfo) -> ! {
     kernel.add_extension(crate::extensions::NetworkExtension::new());
 
     kernel.add_extension(crate::extensions::wasm_programs::WasmProgram::new(
-        wasm_interpret::vm::handler::ExternalHandlerConstant::new("external", |_| {
+        wasm_interpret::vm::handler::ExternalHandlerConstant::new("other", |_| {
             Box::pin(async move {
                 let mut result = Vec::new();
                 result.push(wasm_interpret::vm::StackValue::I32(7));
                 result
             })
         }),
-        include_bytes!("../target/wasm32-wasi/debug/hello-world.wasm"),
-        "main",
+        include_bytes!("../wasm-interpret/tests/extern_func.wasm"),
+        "test",
     ));
 
     if let Some(iter) = kernel.hardware().get_rsdt_entries() {

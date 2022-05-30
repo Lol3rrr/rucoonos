@@ -6,7 +6,7 @@ use alloc::{string::String, vec::Vec};
 // https://webassembly.github.io/spec/core/binary/modules.html#binary-typesec
 
 mod leb128;
-use leb128::{parse_ileb128, parse_uleb128};
+use leb128::parse_uleb128;
 
 mod indices;
 pub use indices::*;
@@ -17,28 +17,10 @@ pub use instruction::*;
 mod module;
 pub use module::Module;
 
+mod types;
+pub use types::*;
+
 pub mod vm;
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct FuncId(u32);
-
-#[derive(Debug)]
-pub enum FuncIdError {
-    InvalidId,
-}
-
-impl Parseable for FuncId {
-    type Error = FuncIdError;
-
-    fn parse<I>(mut iter: I) -> Result<Self, Self::Error>
-    where
-        I: Iterator<Item = u8>,
-    {
-        let id: u32 = parse_uleb128(iter.by_ref()).ok_or(FuncIdError::InvalidId)?;
-
-        Ok(Self(id))
-    }
-}
 
 pub trait Parseable: Sized {
     type Error;
@@ -73,114 +55,13 @@ where
 
         let mut result = Vec::new();
         for _ in 0..size {
-            let item = C::parse(iter.by_ref()).map_err(|e| VectorError::ElementError(e))?;
+            let item = C::parse(iter.by_ref()).map_err(VectorError::ElementError)?;
 
             result.push(item);
         }
 
         Ok(Self { items: result })
     }
-}
-
-#[derive(Debug)]
-pub struct FunctionType {
-    input: ResultType,
-    output: ResultType,
-}
-
-#[derive(Debug)]
-pub enum FunctionTypeError {
-    MissingMagicByte,
-    InvalidMagicByte(u8),
-    InvalidInputResultType(ResultTypeError),
-    InvalidOutputResultType(ResultTypeError),
-}
-
-impl Parseable for FunctionType {
-    type Error = FunctionTypeError;
-
-    fn parse<I>(mut iter: I) -> Result<Self, Self::Error>
-    where
-        I: Iterator<Item = u8>,
-    {
-        let magic_vec = iter.next().ok_or(FunctionTypeError::MissingMagicByte)?;
-        if magic_vec != 0x60 {
-            return Err(FunctionTypeError::InvalidMagicByte(magic_vec));
-        }
-
-        let first =
-            ResultType::parse(iter.by_ref()).map_err(FunctionTypeError::InvalidInputResultType)?;
-        let second =
-            ResultType::parse(iter.by_ref()).map_err(FunctionTypeError::InvalidOutputResultType)?;
-
-        Ok(Self {
-            input: first,
-            output: second,
-        })
-    }
-}
-
-#[derive(Debug)]
-pub struct ResultType {
-    elements: Vector<ValueType>,
-}
-
-#[derive(Debug)]
-pub enum ResultTypeError {
-    VectorError(VectorError<ValueTypeError>),
-}
-
-impl Parseable for ResultType {
-    type Error = ResultTypeError;
-
-    fn parse<I>(iter: I) -> Result<Self, Self::Error>
-    where
-        I: Iterator<Item = u8>,
-    {
-        let elements = Vector::parse(iter).map_err(ResultTypeError::VectorError)?;
-
-        Ok(Self { elements })
-    }
-}
-
-#[derive(Debug, Clone)]
-pub enum ValueType {
-    Number(NumberType),
-    Vector128,
-    FuncRef,
-    ExternRef,
-}
-
-#[derive(Debug)]
-pub enum ValueTypeError {
-    MissingType,
-    Unknown(u8),
-}
-
-impl Parseable for ValueType {
-    type Error = ValueTypeError;
-
-    fn parse<I>(mut iter: I) -> Result<Self, Self::Error>
-    where
-        I: Iterator<Item = u8>,
-    {
-        let byte = iter.next().ok_or(ValueTypeError::MissingType)?;
-
-        match byte {
-            0x7f => Ok(Self::Number(NumberType::I32)),
-            0x7e => Ok(Self::Number(NumberType::I64)),
-            0x7b => Ok(Self::Vector128),
-            0x70 => Ok(Self::FuncRef),
-            0x6f => Ok(Self::ExternRef),
-            other => Err(ValueTypeError::Unknown(other)),
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub enum NumberType {
-    I32,
-    I64,
 }
 
 #[derive(Debug)]
@@ -381,35 +262,6 @@ impl Parseable for ExportDescription {
 }
 
 #[derive(Debug)]
-pub enum RefType {
-    FuncReference,
-    ExternReference,
-}
-
-#[derive(Debug)]
-pub enum RefTypeError {
-    MissingType,
-    UnknownType(u8),
-}
-
-impl Parseable for RefType {
-    type Error = RefTypeError;
-
-    fn parse<I>(mut iter: I) -> Result<Self, Self::Error>
-    where
-        I: Iterator<Item = u8>,
-    {
-        let rtype = iter.next().ok_or(RefTypeError::MissingType)?;
-
-        match rtype {
-            0x70 => Ok(Self::FuncReference),
-            0x6f => Ok(Self::ExternReference),
-            other => Err(RefTypeError::UnknownType(other)),
-        }
-    }
-}
-
-#[derive(Debug)]
 pub struct TableType {
     elem: RefType,
     limits: Limits,
@@ -550,6 +402,23 @@ impl Parseable for Expression {
         }
 
         Ok(Self { instructions })
+    }
+}
+
+impl Expression {
+    pub fn const_eval(&self) -> Result<i32, ()> {
+        if self.instructions.len() != 1 {
+            return Err(());
+        }
+
+        let instr = self.instructions.get(0).expect(
+            "There should be exactly one instruction in the Expression as we previously checked",
+        );
+
+        match instr {
+            Instruction::ConstantI32(con) => Ok(*con),
+            _ => Err(()),
+        }
     }
 }
 
@@ -719,7 +588,7 @@ impl Parseable for ImportDescription {
 #[derive(Debug, Clone)]
 pub enum Element {
     Type1 {
-        func_ids: Vector<FuncId>,
+        func_ids: Vector<FuncIndex>,
         offset: Expression,
     },
 }
@@ -729,7 +598,7 @@ pub enum ElementError {
     MissingId,
     InvalidId(u32),
     InvalidExpression(ExpressionError),
-    InvalidFuncIds(VectorError<FuncIdError>),
+    InvalidFuncIds(VectorError<FuncIndexError>),
 }
 
 impl Parseable for Element {
@@ -746,7 +615,7 @@ impl Parseable for Element {
                 let exp =
                     Expression::parse(iter.by_ref()).map_err(ElementError::InvalidExpression)?;
 
-                let func_ids: Vector<FuncId> =
+                let func_ids: Vector<FuncIndex> =
                     Vector::parse(iter.by_ref()).map_err(ElementError::InvalidFuncIds)?;
 
                 Ok(Self::Type1 {

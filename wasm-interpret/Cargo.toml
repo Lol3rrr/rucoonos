@@ -6,6 +6,10 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+tracing = { version = "0.1", default_features = false }
 
 [dev-dependencies]
 tokio = { version = "1.18", default_features = false, features = ["macros", "rt"] }
+test-log = { version = "0.2", features = ["trace"] }
+env_logger = "0.9"
+tracing-subscriber = {version="0.3", features = ["env-filter"]}

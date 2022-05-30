@@ -1,5 +1,5 @@
 use crate::{
-    leb128::parse_uleb128, Code, Element, Export, FunctionType, Global, Import, Section,
+    leb128::parse_uleb128, Code, Element, Export, FunctionType, Global, Import, Memory, Section,
     SectionError, Table,
 };
 
@@ -118,5 +118,15 @@ impl Module {
                 _ => None,
             })
             .flat_map(|gs| gs.items.iter())
+    }
+
+    pub fn memory(&self) -> Option<&Memory> {
+        self.sections
+            .iter()
+            .filter_map(|sect| match sect {
+                Section::MemorySection(mem) => Some(mem),
+                _ => None,
+            })
+            .find_map(|mems| mems.items.get(0))
     }
 }

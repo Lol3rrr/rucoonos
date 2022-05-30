@@ -2,9 +2,9 @@ use alloc::{boxed::Box, vec::Vec};
 
 use crate::{
     leb128::{parse_ileb128, parse_uleb128},
-    FuncId, FuncIdError, GlobalIndex, GlobalIndexError, LabelIndex, LabelIndexError, LocalIndex,
-    LocalIndexError, Parseable, TableIndex, TableIndexError, TypeIndex, TypeIndexError, Vector,
-    VectorError,
+    BlockType, BlockTypeError, FuncIndex, FuncIndexError, GlobalIndex, GlobalIndexError,
+    LabelIndex, LabelIndexError, LocalIndex, LocalIndexError, Parseable, TableIndex,
+    TableIndexError, TypeIndex, TypeIndexError, Vector, VectorError,
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -49,14 +49,16 @@ impl Parseable for MemArg {
 pub enum Instruction {
     Unreachable,
     Nop,
-    Block(TypeIndex, Vec<Self>),
-    Loop(TypeIndex, Vec<Self>),
+    Block(BlockType, Vec<Self>),
+    Loop(BlockType, Vec<Self>),
+    If(BlockType, Vec<Self>),
+    IfElse(BlockType, Vec<Self>, Vec<Self>),
     Branch(LabelIndex),
     BranchConditional(LabelIndex),
     BranchTable(Vector<LabelIndex>, LabelIndex),
     Return,
-    Call(FuncId),
-    CallIndirect(TableIndex, TypeIndex),
+    Call(FuncIndex),
+    CallIndirect(TypeIndex, TableIndex),
 
     //
     Drop,
@@ -147,14 +149,15 @@ pub enum InstructionError {
     UnknownInstruction(u8),
     InvalidOperand,
     InvalidMemArg(MemArgError),
-    InvalidFuncId(FuncIdError),
+    InvalidFuncId(FuncIndexError),
     InvalidLocalIndex(LocalIndexError),
     InvalodGlobalIndex(GlobalIndexError),
-    InvalidTypeIndex(TypeIndexError),
+    InvalidBlockType(BlockTypeError),
     InvalidInstruction(Box<InstructionError>),
     InvalidLabelIndex(LabelIndexError),
     InvalidLabelIndices(VectorError<LabelIndexError>),
     InvalidTableIndex(TableIndexError),
+    InvalidTypeIndex(TypeIndexError),
 }
 
 impl Parseable for Instruction {
@@ -171,7 +174,7 @@ impl Parseable for Instruction {
             0x01 => Ok(Self::Nop),
             0x02 => {
                 let block_type =
-                    TypeIndex::parse(iter.by_ref()).map_err(InstructionError::InvalidTypeIndex)?;
+                    BlockType::parse(iter.by_ref()).map_err(InstructionError::InvalidBlockType)?;
 
                 let mut instructions = Vec::new();
                 let mut peekable = iter.peekable();
@@ -191,7 +194,7 @@ impl Parseable for Instruction {
             }
             0x03 => {
                 let block_type =
-                    TypeIndex::parse(iter.by_ref()).map_err(InstructionError::InvalidTypeIndex)?;
+                    BlockType::parse(iter.by_ref()).map_err(InstructionError::InvalidBlockType)?;
 
                 let mut instructions = Vec::new();
                 let mut peekable = iter.peekable();
@@ -208,6 +211,45 @@ impl Parseable for Instruction {
                 }
 
                 Ok(Self::Loop(block_type, instructions))
+            }
+            0x4 => {
+                let block_type =
+                    BlockType::parse(iter.by_ref()).map_err(InstructionError::InvalidBlockType)?;
+
+                let mut true_instr = Vec::new();
+                let mut peekable = iter.peekable();
+                while let Some(byte) = peekable.peek() {
+                    if *byte == 0x0b || *byte == 0x05 {
+                        break;
+                    }
+
+                    let instr =
+                        Self::parse(Box::new(peekable.by_ref()) as Box<dyn Iterator<Item = u8>>)
+                            .map_err(|e| InstructionError::InvalidInstruction(Box::new(e)))?;
+                    true_instr.push(instr);
+                }
+
+                match peekable.next() {
+                    Some(b) if b == 0x0b => Ok(Self::If(block_type, true_instr)),
+                    Some(b) if b == 0x05 => {
+                        let mut false_instr = Vec::new();
+                        while let Some(byte) = peekable.peek() {
+                            if *byte == 0x0b {
+                                break;
+                            }
+
+                            let instr = Self::parse(
+                                Box::new(peekable.by_ref()) as Box<dyn Iterator<Item = u8>>
+                            )
+                            .map_err(|e| InstructionError::InvalidInstruction(Box::new(e)))?;
+                            false_instr.push(instr);
+                        }
+
+                        Ok(Self::IfElse(block_type, true_instr, false_instr))
+                    }
+                    Some(_) => unreachable!(),
+                    None => unreachable!(),
+                }
             }
             0x0c => {
                 let lindex = LabelIndex::parse(iter.by_ref())
@@ -231,14 +273,15 @@ impl Parseable for Instruction {
             }
             0x0f => Ok(Self::Return),
             0x10 => {
-                let id = FuncId::parse(iter.by_ref()).map_err(InstructionError::InvalidFuncId)?;
+                let id =
+                    FuncIndex::parse(iter.by_ref()).map_err(InstructionError::InvalidFuncId)?;
                 Ok(Self::Call(id))
             }
             0x11 => {
-                let taid = TableIndex::parse(iter.by_ref())
-                    .map_err(InstructionError::InvalidTableIndex)?;
-                let tyid =
+                let taid =
                     TypeIndex::parse(iter.by_ref()).map_err(InstructionError::InvalidTypeIndex)?;
+                let tyid = TableIndex::parse(iter.by_ref())
+                    .map_err(InstructionError::InvalidTableIndex)?;
                 Ok(Self::CallIndirect(taid, tyid))
             }
             //
