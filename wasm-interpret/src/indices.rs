@@ -40,6 +40,11 @@ impl From<u32> for LabelIndex {
         Self(Index(v))
     }
 }
+impl From<&LabelIndex> for u32 {
+    fn from(ind: &LabelIndex) -> Self {
+        ind.0 .0
+    }
+}
 
 pub type GlobalIndexError = IndexError;
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -124,6 +129,11 @@ impl From<u32> for TableIndex {
         Self(Index(v))
     }
 }
+impl From<&TableIndex> for u32 {
+    fn from(ind: &TableIndex) -> Self {
+        ind.0 .0
+    }
+}
 
 pub type FuncIndexError = IndexError;
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -143,5 +153,10 @@ impl Parseable for FuncIndex {
 impl From<u32> for FuncIndex {
     fn from(v: u32) -> Self {
         Self(Index(v))
+    }
+}
+impl From<FuncIndex> for u32 {
+    fn from(id: FuncIndex) -> Self {
+        id.0 .0
     }
 }

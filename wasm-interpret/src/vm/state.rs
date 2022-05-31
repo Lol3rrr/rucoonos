@@ -6,8 +6,38 @@ use crate::{FuncIndex, Global, GlobalIndex, Instruction, LocalIndex};
 
 #[derive(Debug)]
 pub struct Block<'m> {
-    output_arity: usize,
-    iterator: core::iter::Skip<core::slice::Iter<'m, Instruction>>,
+    pub input_arity: usize,
+    pub output_arity: usize,
+    iterator: BlockIterator<'m>,
+}
+
+#[derive(Debug)]
+pub enum BlockIterator<'m> {
+    Sliced(core::iter::Skip<core::slice::Iter<'m, Instruction>>),
+    Cycled(core::iter::Cycle<core::iter::Skip<core::slice::Iter<'m, Instruction>>>),
+}
+
+impl<'m> Iterator for BlockIterator<'m> {
+    type Item = &'m Instruction;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self {
+            Self::Sliced(iter) => iter.next(),
+            Self::Cycled(iter) => iter.next(),
+        }
+    }
+}
+impl<'m> From<core::iter::Skip<core::slice::Iter<'m, Instruction>>> for BlockIterator<'m> {
+    fn from(iter: core::iter::Skip<core::slice::Iter<'m, Instruction>>) -> Self {
+        Self::Sliced(iter)
+    }
+}
+impl<'m> From<core::iter::Cycle<core::iter::Skip<core::slice::Iter<'m, Instruction>>>>
+    for BlockIterator<'m>
+{
+    fn from(iter: core::iter::Cycle<core::iter::Skip<core::slice::Iter<'m, Instruction>>>) -> Self {
+        Self::Cycled(iter)
+    }
 }
 
 #[derive(Debug)]
@@ -20,16 +50,16 @@ impl<'m> Blocks<'m> {
         Self { blocks: Vec::new() }
     }
 
-    pub fn enter(
-        &mut self,
-        iterator: core::iter::Skip<core::slice::Iter<'m, Instruction>>,
-        output_arity: usize,
-    ) {
+    pub fn enter<I>(&mut self, iterator: I, input_arity: usize, output_arity: usize)
+    where
+        I: Into<BlockIterator<'m>>,
+    {
         tracing::trace!("Entered Block");
 
         self.blocks.push(Block {
+            input_arity,
             output_arity,
-            iterator,
+            iterator: iterator.into(),
         });
     }
 
@@ -40,7 +70,7 @@ impl<'m> Blocks<'m> {
             match last.iterator.next() {
                 Some(item) => return Some(item),
                 None => {
-                    tracing::trace!("End of Block, remaining Blocks {:?}", self.blocks.len() - 1);
+                    tracing::trace!("Left Block");
 
                     let latest = self.blocks.pop().expect("");
 
@@ -74,7 +104,7 @@ impl<'m> Blocks<'m> {
 #[derive(Debug)]
 pub struct State<'m> {
     pub func: FuncIndex,
-    pub pc: usize,
+    pc: usize,
     pub op_stack: OpStack,
     globals: BTreeMap<GlobalIndex, StackValue>,
     current_frame: CurrentFrame,
@@ -91,6 +121,7 @@ pub struct OpStack {
 #[derive(Debug)]
 struct CurrentFrame {
     locals: BTreeMap<LocalIndex, StackValue>,
+    op_stack_starting_height: usize,
 }
 
 #[derive(Debug)]
@@ -99,6 +130,7 @@ struct StackFrame<'m> {
     pc: usize,
     func: FuncIndex,
     blocks: Blocks<'m>,
+    op_stack_starting_height: usize,
 }
 
 #[derive(Debug, PartialEq, Clone)]
@@ -143,11 +175,16 @@ impl<'m> State<'m> {
             globals,
             current_frame: CurrentFrame {
                 locals: func_locals,
+                op_stack_starting_height: 0,
             },
             call_stack: Vec::new(),
 
             _marker: PhantomData {},
         }
+    }
+
+    pub fn current_opstack_starting_height(&self) -> usize {
+        self.current_frame.op_stack_starting_height
     }
 
     pub fn go_into_func(
@@ -163,10 +200,12 @@ impl<'m> State<'m> {
             pc: self.pc,
             locals: prev_locals,
             blocks,
+            op_stack_starting_height: self.current_frame.op_stack_starting_height,
         };
 
         self.pc = 0;
         self.func = func_id;
+        self.current_frame.op_stack_starting_height = self.op_stack.len();
 
         self.call_stack.push(stack_frame);
     }
@@ -177,6 +216,7 @@ impl<'m> State<'m> {
         self.func = prev.func;
         self.pc = prev.pc;
         self.current_frame.locals = prev.locals;
+        self.current_frame.op_stack_starting_height = prev.op_stack_starting_height;
 
         Ok(prev.blocks)
     }
@@ -203,6 +243,10 @@ impl<'m> State<'m> {
 impl OpStack {
     pub fn new() -> Self {
         Self { stack: Vec::new() }
+    }
+
+    pub fn len(&self) -> usize {
+        self.stack.len()
     }
 
     pub fn pop(&mut self) -> Option<StackValue> {

@@ -235,6 +235,7 @@ impl Parseable for Instruction {
                         let mut false_instr = Vec::new();
                         while let Some(byte) = peekable.peek() {
                             if *byte == 0x0b {
+                                let _ = peekable.next();
                                 break;
                             }
 
@@ -347,8 +348,16 @@ impl Parseable for Instruction {
             }
 
             //
-            0x3f => Ok(Self::MemorySize),
-            0x40 => Ok(Self::MemoryGrow),
+            0x3f => {
+                let _ = iter.next();
+
+                Ok(Self::MemorySize)
+            }
+            0x40 => {
+                let _ = iter.next();
+
+                Ok(Self::MemoryGrow)
+            }
 
             //
             0x41 => {

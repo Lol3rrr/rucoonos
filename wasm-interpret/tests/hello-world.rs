@@ -1,5 +1,10 @@
+use std::{future::Future, pin::Pin};
+
 use test_log::test;
-use wasm_interpret::{vm, Module};
+use wasm_interpret::{
+    vm::{self, handler::ExternalHandler},
+    Module,
+};
 
 #[test(tokio::test)]
 async fn hello_world() {
@@ -10,7 +15,12 @@ async fn hello_world() {
 
     let module = module.unwrap();
     dbg!(module.exports().collect::<Vec<_>>());
+    dbg!(module.elements().collect::<Vec<_>>());
 
+    let proc_exit_handler = vm::handler::FallibleExternalHandler::<
+        _,
+        Pin<Box<dyn Future<Output = Vec<vm::StackValue>>>>,
+    >::new("proc_exit", |_, _| Err(()));
     let env_arg_sizes =
         vm::handler::ExternalHandlerConstant::new("environ_sizes_get", |mut stack, mut memory| {
             tracing::trace!(
@@ -29,15 +39,80 @@ async fn hello_world() {
 
             tracing::trace!("Arguments ({:?}, {:?})", env_count, env_size);
 
-            memory.writei32(env_size as u32, 0).expect("");
-            memory.writei32(env_count as u32, 0).expect("");
+            // let test_str = "USER=test\0";
+            // memory.grow(1059416 + test_str.len());
+            // memory.writestr(1059416, test_str).expect("");
+
+            memory.writeu32(env_size as u32, 0).expect("");
+            memory.writeu32(env_count as u32, 0).expect("");
 
             async move { vec![vm::StackValue::I32(0)] }
         });
-    let env = vm::Environment::new(env_arg_sizes);
+    let fd_write_handler =
+        vm::handler::ExternalHandlerConstant::new("fd_write", |mut stack, mut memory| {
+            let retptr0 = match stack.pop() {
+                Some(vm::StackValue::I32(v)) => v,
+                _ => todo!(),
+            };
+            let iovs_len = stack.pop();
+            let iovs = match stack.pop() {
+                Some(vm::StackValue::I32(v)) => v,
+                _ => todo!(),
+            };
+            let fd = match stack.pop() {
+                Some(vm::StackValue::I32(v)) => v,
+                _ => todo!(),
+            };
+
+            tracing::trace!(
+                "Called FD_write with fd={:?} iovs={:?} iovs_len={:?} retptr={:?}",
+                fd,
+                iovs,
+                iovs_len,
+                retptr0
+            );
+
+            let addr = iovs as usize;
+            let addr_end = addr + core::mem::size_of::<wasm_interpret::wasi::IoVec>();
+
+            let sliced = &memory.as_bytes()[addr..addr_end];
+            let start_ptr = sliced.as_ptr();
+
+            let iovec: &wasm_interpret::wasi::IoVec =
+                unsafe { &*(start_ptr as *const wasm_interpret::wasi::IoVec) };
+
+            tracing::trace!("IOVec Buffer {:?} with len {:?}", iovec.buf, iovec.len);
+
+            let str_addr = iovec.buf as usize;
+            let str_addr_end = str_addr + iovec.len as usize;
+
+            let str_slice = &memory.as_bytes()[str_addr..str_addr_end];
+            let buffer_str = core::str::from_utf8(str_slice).unwrap();
+
+            match fd {
+                1 => {
+                    tracing::info!("Found Buffer {:?}", buffer_str);
+                }
+                2 => {
+                    tracing::error!("Found Buffer {:?}", buffer_str);
+                }
+                other => {}
+            };
+
+            memory
+                .writeu32(retptr0 as u32, buffer_str.len() as u32)
+                .expect("");
+
+            async move { vec![vm::StackValue::I32(0)] }
+        });
+    let env = vm::Environment::new(
+        env_arg_sizes
+            .chain(proc_exit_handler)
+            .chain(fd_write_handler),
+    );
     let mut interpreter = vm::Interpreter::new(env, &module);
 
-    let compute_res = interpreter.run_with_wait("_start", || None).await;
+    let compute_res = interpreter.run_with_wait("test", || None).await;
     dbg!(&compute_res);
 
     assert_eq!(Ok(vm::StackValue::I32(2)), compute_res);

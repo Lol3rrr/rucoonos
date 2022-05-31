@@ -1,4 +1,4 @@
-use core::{future::Future, pin::Pin};
+use core::{future::Future, marker::PhantomData, pin::Pin};
 
 use alloc::{boxed::Box, vec::Vec};
 
@@ -16,7 +16,7 @@ pub trait ExternalHandler: Sized {
         name: &str,
         op_stack: HandleOpStack<'_>,
         mem: HandleMemory<'_>,
-    ) -> Pin<Box<dyn Future<Output = Vec<StackValue>>>>;
+    ) -> Result<Pin<Box<dyn Future<Output = Vec<StackValue>>>>, ()>;
 
     fn switch<S>(self, sw: S) -> ExternalHandlerSwitch<S, Self>
     where
@@ -61,8 +61,8 @@ impl ExternalHandler for ExternalHandlerEmpty {
         _: &str,
         _: HandleOpStack<'_>,
         _: HandleMemory<'_>,
-    ) -> Pin<Box<dyn Future<Output = Vec<StackValue>>>> {
-        Box::pin(async move { Vec::new() })
+    ) -> Result<Pin<Box<dyn Future<Output = Vec<StackValue>>>>, ()> {
+        Ok(Box::pin(async move { Vec::new() }))
     }
 }
 
@@ -90,7 +90,7 @@ where
         name: &str,
         op_stack: HandleOpStack<'_>,
         mem: HandleMemory<'_>,
-    ) -> Pin<Box<dyn Future<Output = Vec<StackValue>>>> {
+    ) -> Result<Pin<Box<dyn Future<Output = Vec<StackValue>>>>, ()> {
         if self.first.handles(name) {
             return self.first.handle(name, op_stack, mem);
         }
@@ -99,7 +99,7 @@ where
             return self.second.handle(name, op_stack, mem);
         }
 
-        Box::pin(async move { Vec::new() })
+        Ok(Box::pin(async move { Vec::new() }))
     }
 }
 
@@ -130,8 +130,46 @@ where
         _: &str,
         op_stack: HandleOpStack<'_>,
         mem: HandleMemory<'_>,
-    ) -> Pin<Box<dyn Future<Output = Vec<StackValue>>>> {
+    ) -> Result<Pin<Box<dyn Future<Output = Vec<StackValue>>>>, ()> {
         let result = (self.func)(op_stack, mem);
-        Box::pin(result)
+        Ok(Box::pin(result))
+    }
+}
+
+pub struct FallibleExternalHandler<F, FF> {
+    name: &'static str,
+    func: F,
+    _marker: PhantomData<FF>,
+}
+impl<F, FF> FallibleExternalHandler<F, FF>
+where
+    F: FnMut(HandleOpStack<'_>, HandleMemory<'_>) -> Result<FF, ()>,
+    FF: Future<Output = Vec<StackValue>> + 'static,
+{
+    pub fn new(name: &'static str, func: F) -> Self {
+        Self {
+            name,
+            func,
+            _marker: PhantomData {},
+        }
+    }
+}
+impl<F, FF> ExternalHandler for FallibleExternalHandler<F, FF>
+where
+    F: FnMut(HandleOpStack<'_>, HandleMemory<'_>) -> Result<FF, ()>,
+    FF: Future<Output = Vec<StackValue>> + 'static,
+{
+    fn handles(&self, name: &str) -> bool {
+        self.name == name
+    }
+
+    fn handle(
+        &mut self,
+        name: &str,
+        op_stack: HandleOpStack<'_>,
+        mem: HandleMemory<'_>,
+    ) -> Result<Pin<Box<dyn Future<Output = Vec<StackValue>>>>, ()> {
+        (self.func)(op_stack, mem)
+            .map(|f| Box::pin(f) as Pin<Box<dyn Future<Output = Vec<StackValue>>>>)
     }
 }
