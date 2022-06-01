@@ -26,29 +26,28 @@ use state::State;
 mod branch;
 mod call;
 
-pub struct HandleOpStack<'s> {
+pub struct HandleArguments<'s> {
     stack: &'s mut OpStack,
     arguments: usize,
-    remaining: usize,
 }
 
-impl<'s> HandleOpStack<'s> {
+impl<'s> HandleArguments<'s> {
+    /// The Number of Arguments passed to the Funtion
     pub fn len(&self) -> usize {
         self.arguments
     }
+    pub fn is_empty(&self) -> bool {
+        self.arguments == 0
+    }
 
-    pub fn pop(&mut self) -> Option<StackValue> {
-        if self.remaining == 0 {
-            return None;
-        }
-
-        let res = self.stack.pop();
-
-        if res.is_some() {
-            self.remaining -= 1;
-        }
-
-        res
+    /// Gets the n-th Argument for the Function in the correct Order, according to the Function
+    /// Definition
+    pub fn get<'o>(&'o self, index: usize) -> Option<&'s StackValue>
+    where
+        'o: 's,
+    {
+        let target_index = self.stack.len() - self.arguments + index;
+        self.stack.get(target_index)
     }
 }
 
@@ -99,6 +98,23 @@ impl<'s> HandleMemory<'s> {
 
         self.memory[addr as usize..addr as usize + 4].copy_from_slice(&raw);
         Ok(())
+    }
+
+    pub unsafe fn read<'o, 't, T>(&'o self, addr: usize) -> Option<&'t T>
+    where
+        'o: 't,
+    {
+        let t_size = core::mem::size_of::<T>();
+        if self.memory.len() < addr + t_size {
+            return None;
+        }
+
+        let raw_memory = self.as_bytes();
+
+        let target_slice = &raw_memory[addr..addr + t_size];
+        let target_ptr = target_slice.as_ptr();
+
+        Some(unsafe { &*(target_ptr as *const T) })
     }
 }
 
@@ -399,7 +415,7 @@ where
         &mut self,
         name: &str,
         mut wait: F,
-    ) -> Result<StackValue, RunError>
+    ) -> Result<Vec<StackValue>, RunError>
     where
         F: FnMut() -> Option<Pin<Box<dyn Future<Output = ()>>>>,
     {
@@ -486,6 +502,24 @@ where
                         tracing::trace!("Pushing Constant I64({:?})", con);
 
                         self.exec_state.op_stack.push(StackValue::I64(*con));
+                    }
+                    Instruction::Drop => {
+                        let span = tracing::span!(tracing::Level::TRACE, "Drop");
+                        let _guard = span.enter();
+
+                        tracing::trace!("Drop Instruction");
+
+                        match self.exec_state.op_stack.pop() {
+                            Some(_) => {}
+                            None => {
+                                return Err(RunError {
+                                    err: RunErrorType::Other,
+                                    ctx: RunErrorContext {
+                                        instruction: Some(instr.clone()),
+                                    },
+                                })
+                            }
+                        };
                     }
                     Instruction::Select => {
                         let span = tracing::span!(tracing::Level::TRACE, "Select");
@@ -893,6 +927,44 @@ where
                                     .push(StackValue::I32(first + second));
                             }
                             IntegerVariant::I64 => {
+                                let second = match self.exec_state.op_stack.pop() {
+                                    Some(StackValue::I64(v)) => v,
+                                    _ => {
+                                        return Err(RunError {
+                                            err: RunErrorType::MismatchedTypes,
+                                            ctx: RunErrorContext {
+                                                instruction: Some(instr.clone()),
+                                            },
+                                        })
+                                    }
+                                };
+                                let first = match self.exec_state.op_stack.pop() {
+                                    Some(StackValue::I64(v)) => v,
+                                    _ => {
+                                        return Err(RunError {
+                                            err: RunErrorType::MismatchedTypes,
+                                            ctx: RunErrorContext {
+                                                instruction: Some(instr.clone()),
+                                            },
+                                        })
+                                    }
+                                };
+
+                                self.exec_state
+                                    .op_stack
+                                    .push(StackValue::I64(first + second));
+                            }
+                        };
+                    }
+                    Instruction::MulI(variant) => {
+                        let span = tracing::span!(tracing::Level::TRACE, "MulI");
+                        let _guard = span.enter();
+
+                        tracing::trace!("MulI Variant {:?}", variant);
+
+                        let second = match self.exec_state.op_stack.pop() {
+                            Some(s) => s,
+                            None => {
                                 return Err(RunError {
                                     err: RunErrorType::Other,
                                     ctx: RunErrorContext {
@@ -901,6 +973,33 @@ where
                                 })
                             }
                         };
+                        let first = match self.exec_state.op_stack.pop() {
+                            Some(f) => f,
+                            None => {
+                                return Err(RunError {
+                                    err: RunErrorType::Other,
+                                    ctx: RunErrorContext {
+                                        instruction: Some(instr.clone()),
+                                    },
+                                })
+                            }
+                        };
+
+                        let res = match (variant, first, second) {
+                            (IntegerVariant::I32, StackValue::I32(fv), StackValue::I32(sv)) => {
+                                StackValue::I32(fv * sv)
+                            }
+                            _ => {
+                                return Err(RunError {
+                                    err: RunErrorType::MismatchedTypes,
+                                    ctx: RunErrorContext {
+                                        instruction: Some(instr.clone()),
+                                    },
+                                })
+                            }
+                        };
+
+                        self.exec_state.op_stack.push(res);
                     }
                     Instruction::AndI(variant) => {
                         let span = tracing::span!(tracing::Level::TRACE, "AndI");
@@ -979,6 +1078,9 @@ where
                         let res = match (variant, first, second) {
                             (IntegerVariant::I32, StackValue::I32(fv), StackValue::I32(sv)) => {
                                 StackValue::I32(fv | sv)
+                            }
+                            (IntegerVariant::I64, StackValue::I64(fv), StackValue::I64(sv)) => {
+                                StackValue::I64(fv | sv)
                             }
                             _ => {
                                 return Err(RunError {
@@ -1123,12 +1225,12 @@ where
                                 IntegerVariant::I32,
                                 StackValue::I32(first),
                                 StackValue::I32(second),
-                            ) => {
-                                let first = first as u32;
-                                let second = second as u32;
-
-                                StackValue::I32((first.shl(second)) as i32)
-                            }
+                            ) => StackValue::I32(first.shl(second)),
+                            (
+                                IntegerVariant::I64,
+                                StackValue::I64(first),
+                                StackValue::I64(second),
+                            ) => StackValue::I64(first.shl(second)),
                             _ => {
                                 return Err(RunError {
                                     err: RunErrorType::MismatchedTypes,
@@ -1140,6 +1242,66 @@ where
                         };
 
                         self.exec_state.op_stack.push(res);
+                    }
+                    Instruction::WrapI32I64 => {
+                        let span = tracing::span!(tracing::Level::TRACE, "WrapI32I64");
+                        let _guard = span.enter();
+
+                        tracing::trace!("Wrapping I64 down to I32");
+
+                        let prev = match self.exec_state.op_stack.pop() {
+                            Some(StackValue::I64(v)) => v,
+                            Some(other) => {
+                                return Err(RunError {
+                                    err: RunErrorType::MismatchedTypes,
+                                    ctx: RunErrorContext {
+                                        instruction: Some(instr.clone()),
+                                    },
+                                })
+                            }
+                            None => {
+                                return Err(RunError {
+                                    err: RunErrorType::Other,
+                                    ctx: RunErrorContext {
+                                        instruction: Some(instr.clone()),
+                                    },
+                                })
+                            }
+                        };
+
+                        let n_value = (prev % (i32::MAX as i64)) as i32;
+
+                        self.exec_state.op_stack.push(StackValue::I32(n_value));
+                    }
+                    Instruction::ExtendI64I32U => {
+                        let span = tracing::span!(tracing::Level::TRACE, "ExtendI64I32");
+                        let _guard = span.enter();
+
+                        tracing::trace!("Extending I32 to I64 unsigned");
+
+                        let prev = match self.exec_state.op_stack.pop() {
+                            Some(StackValue::I32(v)) => v,
+                            Some(other) => {
+                                return Err(RunError {
+                                    err: RunErrorType::MismatchedTypes,
+                                    ctx: RunErrorContext {
+                                        instruction: Some(instr.clone()),
+                                    },
+                                })
+                            }
+                            None => {
+                                return Err(RunError {
+                                    err: RunErrorType::Other,
+                                    ctx: RunErrorContext {
+                                        instruction: Some(instr.clone()),
+                                    },
+                                })
+                            }
+                        };
+
+                        let n_value = ((prev as u32) as u64) as i64;
+
+                        self.exec_state.op_stack.push(StackValue::I64(n_value));
                     }
                     Instruction::LocalGet(id) => {
                         let span = tracing::span!(tracing::Level::TRACE, "LocalGet");
@@ -1191,6 +1353,11 @@ where
 
                         tracing::trace!("Local Tee {:?} = {:?}", id, value);
 
+                        // TODO
+                        // Same as in the Set, is this actually correct?
+                        *local_var = value;
+
+                        /*
                         match (local_var, value) {
                             (StackValue::I32(lvar), StackValue::I32(nvar)) => {
                                 *lvar = nvar;
@@ -1204,6 +1371,7 @@ where
                                 })
                             }
                         };
+                        */
                     }
                     Instruction::LocalSet(id) => {
                         let span = tracing::span!(tracing::Level::TRACE, "LocalSet");
@@ -1402,6 +1570,17 @@ where
                                     StackValue::I32(0)
                                 }
                             }
+                            (
+                                IntegerVariant::I64,
+                                StackValue::I64(first),
+                                StackValue::I64(second),
+                            ) => {
+                                if first == second {
+                                    StackValue::I32(1)
+                                } else {
+                                    StackValue::I32(0)
+                                }
+                            }
                             _ => {
                                 return Err(RunError {
                                     err: RunErrorType::MismatchedTypes,
@@ -1450,6 +1629,17 @@ where
                                 IntegerVariant::I32,
                                 StackValue::I32(first),
                                 StackValue::I32(second),
+                            ) => {
+                                if first != second {
+                                    StackValue::I32(1)
+                                } else {
+                                    StackValue::I32(0)
+                                }
+                            }
+                            (
+                                IntegerVariant::I64,
+                                StackValue::I64(first),
+                                StackValue::I64(second),
                             ) => {
                                 if first != second {
                                     StackValue::I32(1)
@@ -1744,6 +1934,61 @@ where
 
                         self.exec_state.op_stack.push(res);
                     }
+                    Instruction::GeUI(var) => {
+                        let span = tracing::span!(tracing::Level::TRACE, "GeUI");
+                        let _guard = span.enter();
+
+                        tracing::trace!("Greater Than or Equal Unsigned Integer Comparison");
+
+                        let second = match self.exec_state.op_stack.pop() {
+                            Some(s) => s,
+                            None => {
+                                return Err(RunError {
+                                    err: RunErrorType::Other,
+                                    ctx: RunErrorContext {
+                                        instruction: Some(instr.clone()),
+                                    },
+                                })
+                            }
+                        };
+                        let first = match self.exec_state.op_stack.pop() {
+                            Some(f) => f,
+                            None => {
+                                return Err(RunError {
+                                    err: RunErrorType::Other,
+                                    ctx: RunErrorContext {
+                                        instruction: Some(instr.clone()),
+                                    },
+                                })
+                            }
+                        };
+
+                        tracing::trace!("Greater Than or Equal: {:?} >= {:?}", first, second);
+
+                        let res = match (var, first, second) {
+                            (
+                                IntegerVariant::I32,
+                                StackValue::I32(first),
+                                StackValue::I32(second),
+                            ) => {
+                                if (first as u32) >= (second as u32) {
+                                    StackValue::I32(1)
+                                } else {
+                                    StackValue::I32(0)
+                                }
+                            }
+                            _ => {
+                                return Err(RunError {
+                                    err: RunErrorType::MismatchedTypes,
+                                    ctx: RunErrorContext {
+                                        instruction: Some(instr.clone()),
+                                    },
+                                })
+                            }
+                        };
+
+                        self.exec_state.op_stack.push(res);
+                    }
                     Instruction::Call(cid) => {
                         let span = tracing::span!(tracing::Level::TRACE, "Call");
                         let _guard = span.enter();
@@ -1907,49 +2152,7 @@ where
                         };
                         tracing::trace!("Branch Table to {:?}", target_index);
 
-                        let b_index: u32 = target_index.into();
-
-                        // 1.
-                        assert!(blocks.blocks.len() > b_index as usize);
-
-                        // 2.
-                        let L = blocks.blocks.get(b_index as usize).expect("There should be at least this many blocks because we previously asserted this");
-
-                        // 3.
-                        let n = L.input_arity;
-
-                        // 4.
-                        assert!(self.exec_state.op_stack.len() >= n);
-
-                        // 5.
-                        let values = {
-                            let mut tmp = Vec::with_capacity(n);
-
-                            for _ in 0..n {
-                                let val = self.exec_state.op_stack.pop().expect("");
-                                tmp.push(val);
-                            }
-
-                            tmp
-                        };
-
-                        // 6.
-                        for _ in 0..(b_index + 1) {
-                            while !matches!(
-                                self.exec_state.op_stack.last(),
-                                Some(StackValue::Block) | None
-                            ) {
-                                self.exec_state.op_stack.pop();
-                            }
-
-                            self.exec_state.op_stack.pop();
-                            blocks.blocks.pop();
-                        }
-
-                        // 7.
-                        for val in values {
-                            self.exec_state.op_stack.push(val);
-                        }
+                        branch::branch(self, &mut blocks, u32::from(target_index) as usize);
                     }
                     Instruction::BranchConditional(index) => {
                         let span = tracing::span!(tracing::Level::TRACE, "BranchConditional");
@@ -1988,49 +2191,7 @@ where
                         if cond_value != 0 {
                             tracing::trace!("Taking Conditional Branch");
 
-                            let b_index: u32 = index.into();
-
-                            // 1.
-                            assert!(blocks.blocks.len() > b_index as usize);
-
-                            // 2.
-                            let L = blocks.blocks.get(b_index as usize).expect("There should be at least this many blocks because we previously asserted this");
-
-                            // 3.
-                            let n = L.input_arity;
-
-                            // 4.
-                            assert!(self.exec_state.op_stack.len() >= n);
-
-                            // 5.
-                            let values = {
-                                let mut tmp = Vec::with_capacity(n);
-
-                                for _ in 0..n {
-                                    let val = self.exec_state.op_stack.pop().expect("");
-                                    tmp.push(val);
-                                }
-
-                                tmp
-                            };
-
-                            // 6.
-                            for _ in 0..(b_index + 1) {
-                                while !matches!(
-                                    self.exec_state.op_stack.last(),
-                                    Some(StackValue::Block) | None
-                                ) {
-                                    self.exec_state.op_stack.pop();
-                                }
-
-                                self.exec_state.op_stack.pop();
-                                blocks.blocks.pop();
-                            }
-
-                            // 7.
-                            for val in values {
-                                self.exec_state.op_stack.push(val);
-                            }
+                            branch::branch(self, &mut blocks, u32::from(index) as usize);
                         } else {
                             tracing::trace!("Not taking Conditional Branch");
                         }
@@ -2039,7 +2200,11 @@ where
                         let span = tracing::span!(tracing::Level::TRACE, "Return");
                         let _guard = span.enter();
 
-                        tracing::trace!("Return");
+                        tracing::trace!(
+                            "Return Op-Stack {:?} entered with {:?}",
+                            self.exec_state.op_stack.len(),
+                            self.exec_state.current_opstack_starting_height()
+                        );
 
                         // 2.
                         let func = self.functions.get(&self.exec_state.func).expect("");
@@ -2073,6 +2238,11 @@ where
                             blocks.blocks.pop();
                         }
 
+                        assert!(
+                            self.exec_state.op_stack.len()
+                                >= self.exec_state.current_opstack_starting_height()
+                        );
+
                         for _ in 0..(self
                             .exec_state
                             .op_stack
@@ -2086,6 +2256,10 @@ where
                         for val in values {
                             self.exec_state.op_stack.push(val);
                         }
+
+                        blocks = self.exec_state.return_from_func().unwrap();
+
+                        continue 'outer;
                     }
                     Instruction::MemorySize => {
                         let span = tracing::span!(tracing::Level::TRACE, "Memory Size");
@@ -2163,6 +2337,21 @@ where
             }
 
             if self.exec_state.has_predecessor() {
+                tracing::trace!("Reached End of Function {:?}", self.exec_state.func);
+
+                tracing::trace!(
+                    "Return Op-Stack {:?} entered with {:?}",
+                    self.exec_state.op_stack.len(),
+                    self.exec_state.current_opstack_starting_height()
+                );
+
+                if self.exec_state.op_stack.len()
+                    < self.exec_state.current_opstack_starting_height()
+                {
+                    tracing::trace!("Op-Stack {:#?}", self.exec_state.op_stack);
+                    panic!();
+                }
+
                 blocks = self.exec_state.return_from_func().unwrap();
 
                 tracing::trace!(
@@ -2178,9 +2367,24 @@ where
             break;
         }
 
-        self.exec_state.op_stack.pop().ok_or(RunError {
-            err: RunErrorType::Other,
-            ctx: RunErrorContext { instruction: None },
-        })
+        let functy = self
+            .functions
+            .get(&self.exec_state.func)
+            .map(|f| match f {
+                Function::Internal(_, t) => t,
+                _ => unreachable!(),
+            })
+            .expect("");
+
+        tracing::trace!("Function Types {:?}", functy);
+
+        if self.exec_state.op_stack.len() != functy.output.elements.items.len() {
+            return Err(RunError {
+                err: RunErrorType::Other,
+                ctx: RunErrorContext { instruction: None },
+            });
+        }
+
+        Ok(self.exec_state.take_stack().into())
     }
 }

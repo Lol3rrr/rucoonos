@@ -2,7 +2,7 @@ use core::{future::Future, marker::PhantomData, pin::Pin};
 
 use alloc::{boxed::Box, vec::Vec};
 
-use super::{HandleMemory, HandleOpStack, StackValue};
+use super::{HandleArguments, HandleMemory, StackValue};
 
 /// A Handler represents a way to provide external Functions to a WASM environment
 pub trait ExternalHandler: Sized {
@@ -14,7 +14,7 @@ pub trait ExternalHandler: Sized {
     fn handle(
         &mut self,
         name: &str,
-        op_stack: HandleOpStack<'_>,
+        args: HandleArguments<'_>,
         mem: HandleMemory<'_>,
     ) -> Result<Pin<Box<dyn Future<Output = Vec<StackValue>>>>, ()>;
 
@@ -59,7 +59,7 @@ impl ExternalHandler for ExternalHandlerEmpty {
     fn handle(
         &mut self,
         _: &str,
-        _: HandleOpStack<'_>,
+        _: HandleArguments<'_>,
         _: HandleMemory<'_>,
     ) -> Result<Pin<Box<dyn Future<Output = Vec<StackValue>>>>, ()> {
         Ok(Box::pin(async move { Vec::new() }))
@@ -88,15 +88,15 @@ where
     fn handle(
         &mut self,
         name: &str,
-        op_stack: HandleOpStack<'_>,
+        args: HandleArguments<'_>,
         mem: HandleMemory<'_>,
     ) -> Result<Pin<Box<dyn Future<Output = Vec<StackValue>>>>, ()> {
         if self.first.handles(name) {
-            return self.first.handle(name, op_stack, mem);
+            return self.first.handle(name, args, mem);
         }
 
         if self.second.handles(name) {
-            return self.second.handle(name, op_stack, mem);
+            return self.second.handle(name, args, mem);
         }
 
         Ok(Box::pin(async move { Vec::new() }))
@@ -109,7 +109,7 @@ pub struct ExternalHandlerConstant<F> {
 }
 impl<F, FF> ExternalHandlerConstant<F>
 where
-    F: FnMut(HandleOpStack<'_>, HandleMemory<'_>) -> FF,
+    F: FnMut(HandleArguments<'_>, HandleMemory<'_>) -> FF,
     FF: Future<Output = Vec<StackValue>> + 'static,
 {
     pub fn new(name: &'static str, func: F) -> Self {
@@ -118,7 +118,7 @@ where
 }
 impl<F, FF> ExternalHandler for ExternalHandlerConstant<F>
 where
-    F: FnMut(HandleOpStack<'_>, HandleMemory<'_>) -> FF,
+    F: FnMut(HandleArguments<'_>, HandleMemory<'_>) -> FF,
     FF: Future<Output = Vec<StackValue>> + 'static,
 {
     fn handles(&self, name: &str) -> bool {
@@ -128,10 +128,10 @@ where
     fn handle(
         &mut self,
         _: &str,
-        op_stack: HandleOpStack<'_>,
+        args: HandleArguments<'_>,
         mem: HandleMemory<'_>,
     ) -> Result<Pin<Box<dyn Future<Output = Vec<StackValue>>>>, ()> {
-        let result = (self.func)(op_stack, mem);
+        let result = (self.func)(args, mem);
         Ok(Box::pin(result))
     }
 }
@@ -143,7 +143,7 @@ pub struct FallibleExternalHandler<F, FF> {
 }
 impl<F, FF> FallibleExternalHandler<F, FF>
 where
-    F: FnMut(HandleOpStack<'_>, HandleMemory<'_>) -> Result<FF, ()>,
+    F: FnMut(HandleArguments<'_>, HandleMemory<'_>) -> Result<FF, ()>,
     FF: Future<Output = Vec<StackValue>> + 'static,
 {
     pub fn new(name: &'static str, func: F) -> Self {
@@ -156,7 +156,7 @@ where
 }
 impl<F, FF> ExternalHandler for FallibleExternalHandler<F, FF>
 where
-    F: FnMut(HandleOpStack<'_>, HandleMemory<'_>) -> Result<FF, ()>,
+    F: FnMut(HandleArguments<'_>, HandleMemory<'_>) -> Result<FF, ()>,
     FF: Future<Output = Vec<StackValue>> + 'static,
 {
     fn handles(&self, name: &str) -> bool {
@@ -166,10 +166,10 @@ where
     fn handle(
         &mut self,
         name: &str,
-        op_stack: HandleOpStack<'_>,
+        args: HandleArguments<'_>,
         mem: HandleMemory<'_>,
     ) -> Result<Pin<Box<dyn Future<Output = Vec<StackValue>>>>, ()> {
-        (self.func)(op_stack, mem)
+        (self.func)(args, mem)
             .map(|f| Box::pin(f) as Pin<Box<dyn Future<Output = Vec<StackValue>>>>)
     }
 }

@@ -16,5 +16,5 @@ async fn return_const() {
     let mut interpreter = vm::Interpreter::new(env, &module);
 
     let compute_res = interpreter.run_with_wait("main", || None).await;
-    assert_eq!(Ok(vm::StackValue::I32(42)), compute_res);
+    assert_eq!(Ok(vec![vm::StackValue::I32(42)]), compute_res);
 }

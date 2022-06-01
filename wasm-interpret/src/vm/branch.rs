@@ -10,13 +10,13 @@ where
     assert!(blocks.blocks.len() > b_index);
 
     // 2.
-    let L = blocks
-        .blocks
-        .get(b_index)
-        .expect("There should be at least this many blocks because we previously asserted this");
+    let block =
+        blocks.blocks.iter().rev().nth(b_index).expect(
+            "There should be at least this many blocks because we previously asserted this",
+        );
 
     // 3.
-    let n = L.input_arity;
+    let n = block.input_arity;
 
     // 4.
     assert!(interpret.exec_state.op_stack.len() >= n);
@@ -34,7 +34,7 @@ where
     };
 
     // 6.
-    for _ in 0..(b_index + 1) {
+    for i in 0..(b_index + 1) {
         while !matches!(
             interpret.exec_state.op_stack.last(),
             Some(StackValue::Block) | None
@@ -42,7 +42,11 @@ where
             interpret.exec_state.op_stack.pop();
         }
 
-        interpret.exec_state.op_stack.pop();
+        let popped = interpret.exec_state.op_stack.pop();
+        if i < b_index {
+            // assert_eq!(Some(StackValue::Block), popped);
+        }
+
         blocks.blocks.pop();
     }
 

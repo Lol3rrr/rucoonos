@@ -1,4 +1,11 @@
-use std::{future::Future, pin::Pin};
+use std::{
+    future::Future,
+    pin::Pin,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
+};
 
 use test_log::test;
 use wasm_interpret::{
@@ -17,31 +24,26 @@ async fn hello_world() {
     dbg!(module.exports().collect::<Vec<_>>());
     dbg!(module.elements().collect::<Vec<_>>());
 
+    let logged = Arc::new(AtomicBool::new(false));
+
     let proc_exit_handler = vm::handler::FallibleExternalHandler::<
         _,
         Pin<Box<dyn Future<Output = Vec<vm::StackValue>>>>,
     >::new("proc_exit", |_, _| Err(()));
     let env_arg_sizes =
-        vm::handler::ExternalHandlerConstant::new("environ_sizes_get", |mut stack, mut memory| {
-            tracing::trace!(
-                "Called 'environ_sizes_get' with {:?} Arguments",
-                stack.len()
-            );
+        vm::handler::ExternalHandlerConstant::new("environ_sizes_get", |args, mut memory| {
+            tracing::trace!("Called 'environ_sizes_get' with {:?} Arguments", args.len());
 
-            let env_size = match stack.pop().expect("") {
-                vm::StackValue::I32(ptr) => ptr,
+            let env_size = match args.get(1).expect("") {
+                vm::StackValue::I32(ptr) => *ptr,
                 _ => todo!(),
             };
-            let env_count = match stack.pop().expect("") {
-                vm::StackValue::I32(ptr) => ptr,
+            let env_count = match args.get(0).expect("") {
+                vm::StackValue::I32(ptr) => *ptr,
                 _ => todo!(),
             };
 
             tracing::trace!("Arguments ({:?}, {:?})", env_count, env_size);
-
-            // let test_str = "USER=test\0";
-            // memory.grow(1059416 + test_str.len());
-            // memory.writestr(1059416, test_str).expect("");
 
             memory.writeu32(env_size as u32, 0).expect("");
             memory.writeu32(env_count as u32, 0).expect("");
@@ -49,18 +51,20 @@ async fn hello_world() {
             async move { vec![vm::StackValue::I32(0)] }
         });
     let fd_write_handler =
-        vm::handler::ExternalHandlerConstant::new("fd_write", |mut stack, mut memory| {
-            let retptr0 = match stack.pop() {
-                Some(vm::StackValue::I32(v)) => v,
+        vm::handler::ExternalHandlerConstant::new("fd_write", |args, mut memory| {
+            logged.store(true, Ordering::SeqCst);
+
+            let retptr0 = match args.get(3) {
+                Some(vm::StackValue::I32(v)) => *v,
                 _ => todo!(),
             };
-            let iovs_len = stack.pop();
-            let iovs = match stack.pop() {
-                Some(vm::StackValue::I32(v)) => v,
+            let iovs_len = args.get(2);
+            let iovs = match args.get(1) {
+                Some(vm::StackValue::I32(v)) => *v,
                 _ => todo!(),
             };
-            let fd = match stack.pop() {
-                Some(vm::StackValue::I32(v)) => v,
+            let fd = match args.get(0) {
+                Some(vm::StackValue::I32(v)) => *v,
                 _ => todo!(),
             };
 
@@ -72,14 +76,8 @@ async fn hello_world() {
                 retptr0
             );
 
-            let addr = iovs as usize;
-            let addr_end = addr + core::mem::size_of::<wasm_interpret::wasi::IoVec>();
-
-            let sliced = &memory.as_bytes()[addr..addr_end];
-            let start_ptr = sliced.as_ptr();
-
             let iovec: &wasm_interpret::wasi::IoVec =
-                unsafe { &*(start_ptr as *const wasm_interpret::wasi::IoVec) };
+                unsafe { memory.read(iovs as usize) }.expect("");
 
             tracing::trace!("IOVec Buffer {:?} with len {:?}", iovec.buf, iovec.len);
 
@@ -115,5 +113,6 @@ async fn hello_world() {
     let compute_res = interpreter.run_with_wait("test", || None).await;
     dbg!(&compute_res);
 
-    assert_eq!(Ok(vm::StackValue::I32(2)), compute_res);
+    assert_eq!(Ok(vec![]), compute_res);
+    assert!(logged.load(Ordering::SeqCst));
 }

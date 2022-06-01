@@ -1,5 +1,5 @@
 use crate::{
-    vm::{state::Blocks, HandleMemory, HandleOpStack},
+    vm::{state::Blocks, HandleArguments, HandleMemory},
     FuncIndex, Instruction,
 };
 
@@ -71,19 +71,14 @@ where
 
             // TODO
             // Figure out how many arguments the external Function receives
-            let op_stack = HandleOpStack {
+            let args = HandleArguments {
                 stack: &mut interpret.exec_state.op_stack,
                 arguments: t.input.elements.items.len(),
-                remaining: t.input.elements.items.len(),
             };
             let h_memory = HandleMemory {
                 memory: &mut interpret.env.memory,
             };
-            let result = match interpret
-                .env
-                .external_handler
-                .handle(name, op_stack, h_memory)
-            {
+            let result = match interpret.env.external_handler.handle(name, args, h_memory) {
                 Ok(hf) => hf.await,
                 Err(_) => {
                     return Err(RunError {

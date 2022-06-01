@@ -19,5 +19,5 @@ async fn extern_func() {
     let compute_res = interpreter.run_with_wait("test", || None).await;
     dbg!(&compute_res);
 
-    assert_eq!(Ok(vm::StackValue::I32(-5)), compute_res);
+    assert_eq!(Ok(vec![vm::StackValue::I32(-5)]), compute_res);
 }

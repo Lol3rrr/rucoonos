@@ -82,6 +82,7 @@ impl<'m> Blocks<'m> {
                     match op_stack.pop() {
                         Some(l) if l == StackValue::Block => {
                             // End of Block reached
+                            op_stack.push(l);
                         }
                         Some(l) => {
                             assert_eq!(0, self.blocks.len());
@@ -238,6 +239,10 @@ impl<'m> State<'m> {
     pub fn get_global_mut(&mut self, id: &GlobalIndex) -> Option<&mut StackValue> {
         self.globals.get_mut(id)
     }
+
+    pub fn take_stack(&mut self) -> OpStack {
+        core::mem::replace(&mut self.op_stack, OpStack::new())
+    }
 }
 
 impl OpStack {
@@ -264,5 +269,14 @@ impl OpStack {
         for item in items {
             self.stack.push(item);
         }
+    }
+
+    pub(super) fn get(&self, index: usize) -> Option<&StackValue> {
+        self.stack.get(index)
+    }
+}
+impl From<OpStack> for Vec<StackValue> {
+    fn from(ops: OpStack) -> Self {
+        ops.stack
     }
 }
