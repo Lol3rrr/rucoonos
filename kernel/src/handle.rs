@@ -39,7 +39,7 @@ impl Handle {
         let _ = self.run_queue.sender.enqueue(TaskID { id: task_id });
     }
 
-    pub(crate) fn add_raw_task(&self, fut: Pin<Box<dyn Future<Output = ()>>>) {
+    pub(crate) fn add_raw_task(&self, fut: Pin<Box<dyn Future<Output = ()> + 'static>>) {
         let task_id = self.id_count.fetch_add(1, Ordering::SeqCst);
 
         let task = Task::new_raw(TaskID { id: task_id }, fut);

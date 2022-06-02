@@ -5,7 +5,9 @@ use alloc::{boxed::Box, vec::Vec};
 use super::{state::OpStack, StackValue};
 
 #[derive(Debug)]
-pub enum HandleError {}
+pub enum HandleError {
+    Other,
+}
 
 /// A Handler represents a way to provide external Functions to a WASM environment
 pub trait ExternalHandler: Sized {
@@ -131,7 +133,7 @@ pub struct FallibleExternalHandler<F, FF> {
 }
 impl<F, FF> FallibleExternalHandler<F, FF>
 where
-    F: FnMut(HandleArguments<'_>, HandleMemory<'_>) -> Result<FF, ()>,
+    F: FnMut(HandleArguments<'_>, HandleMemory<'_>) -> Result<FF, HandleError>,
     FF: Future<Output = Vec<StackValue>> + 'static,
 {
     pub fn new(name: &'static str, func: F) -> Self {

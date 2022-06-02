@@ -27,7 +27,7 @@ async fn hello_world() {
     let proc_exit_handler = vm::handler::FallibleExternalHandler::<
         _,
         Pin<Box<dyn Future<Output = Vec<vm::StackValue>>>>,
-    >::new("proc_exit", |_, _| Err(()));
+    >::new("proc_exit", |_, _| Err(vm::handler::HandleError::Other));
     let env_arg_sizes =
         vm::handler::ExternalHandlerConstant::new("environ_sizes_get", |args, mut memory| {
             tracing::trace!("Called 'environ_sizes_get' with {:?} Arguments", args.len());

@@ -38,19 +38,13 @@ fn kernel_main(boot_info: &'static mut bootloader::BootInfo) -> ! {
 
     // Setup tracing for the Kernel
     kernel.add_extension(crate::extensions::LogExtension::new(
-        crate::extensions::logging::LogLevel::Debug,
+        crate::extensions::logging::LogLevel::Trace,
     ));
 
     kernel.add_extension(crate::extensions::NetworkExtension::new());
 
     kernel.add_extension(crate::extensions::wasm_programs::WasmProgram::new(
-        wasm_interpret::vm::handler::ExternalHandlerConstant::new("other", |_, _| {
-            Box::pin(async move {
-                let mut result = Vec::new();
-                result.push(wasm_interpret::vm::StackValue::I32(7));
-                result
-            })
-        }),
+        wasm_interpret::vm::handler::empty_handler(),
         include_bytes!("../wasm-interpret/tests/extern_func.wasm"),
         "test",
     ));
@@ -76,39 +70,6 @@ fn kernel_main(boot_info: &'static mut bootloader::BootInfo) -> ! {
             };
         }
     }
-
-    if false {
-        /*
-        let mut tmp = Vec::new();
-        kernel.hardware().with_networking_device(|dev| {
-            let func = dev.blocking_init().unwrap();
-            tmp.push(func);
-        });
-
-        for init in tmp {
-            init();
-        }
-        */
-    }
-
-    /*
-    let udp_listen = kernel.hardware().find_apply_device(
-        |dev| match dev {
-            hardware::device::Device::Network(n_dev) => true,
-            _ => false,
-        },
-        |dev| {
-            let n_dev = match dev {
-                hardware::device::Device::Network(n) => n,
-                _ => unreachable!(),
-            };
-
-            println!("Device-IP: {:?}", n_dev.metadata.ip);
-
-            hardware::api::networking::UDPListener::bind(8080, &n_dev).unwrap()
-        },
-    );
-    */
 
     kernel.hardware().with_networking_device(|device| {
         let sender = &device.packet_queue;

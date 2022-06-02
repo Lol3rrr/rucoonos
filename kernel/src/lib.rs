@@ -16,7 +16,8 @@ pub use handle::Handle;
 /// Extensions allow you to add custom parts to the Kernel to enable new Things, like networking
 pub trait Extension<H> {
     /// Setups the Extension and the returned Future
-    fn setup(self, kernel: &Kernel<H>, hardware: &H) -> Pin<Box<dyn Future<Output = ()>>>;
+    fn setup(self, kernel: &Kernel<H>, hardware: &H)
+        -> Pin<Box<dyn Future<Output = ()> + 'static>>;
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -104,7 +105,9 @@ impl<H> Kernel<H> {
             };
 
             match entry.run(&self.queue_sender) {
-                Poll::Ready(_) => {}
+                Poll::Ready(_) => {
+                    tracing::error!("Done with Task");
+                }
                 Poll::Pending => {}
             };
         }

@@ -32,6 +32,8 @@ where
         kernel: &kernel::Kernel<H>,
         hardware: &H,
     ) -> core::pin::Pin<alloc::boxed::Box<dyn core::future::Future<Output = ()>>> {
+        tracing::trace!("Setting up WASM-Extension");
+
         let env = vm::Environment::new(self.handlers);
         let module = match Module::parse(self.data) {
             Ok(m) => m,
@@ -40,6 +42,8 @@ where
                 return Box::pin(async move {});
             }
         };
+
+        tracing::trace!("Parsed WASM Module");
 
         Box::pin(run_module(self.name, module, env))
     }
@@ -50,13 +54,19 @@ async fn run_module<EH>(name: &'static str, module: Module, env: vm::Environment
 where
     EH: vm::handler::ExternalHandler,
 {
+    tracing::info!("Starting...");
+    rucoon::futures::yield_now().await;
+
     let mut interpreter = vm::Interpreter::new(env, &module);
+
+    tracing::info!("Setup Interpreter");
+    rucoon::futures::yield_now().await;
 
     let mut count = 0;
     match interpreter
         .run_with_wait(name, || {
             count += 1;
-            if count > 100 {
+            if count > 1 {
                 count = 0;
                 Some(Box::pin(rucoon::futures::yield_now()))
             } else {
@@ -71,5 +81,5 @@ where
         Err(e) => {
             tracing::error!("Running WASM {:?}", e);
         }
-    }
+    };
 }
