@@ -1,11 +1,13 @@
-use crate::{
-    vm::{state::Blocks, HandleArguments, HandleMemory},
-    FuncIndex, Instruction,
+use crate::vm::{
+    handler::{HandleArguments, HandleMemory},
+    state::Blocks,
 };
 
 use super::{
     handler::ExternalHandler, Function, Interpreter, RunError, RunErrorContext, RunErrorType,
 };
+
+use wasm::{FuncIndex, Instruction};
 
 use alloc::string::String;
 

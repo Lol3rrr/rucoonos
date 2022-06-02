@@ -8,10 +8,8 @@ use std::{
 };
 
 use test_log::test;
-use wasm_interpret::{
-    vm::{self, handler::ExternalHandler},
-    Module,
-};
+use wasm::Module;
+use wasm_interpret::vm::{self, handler::ExternalHandler};
 
 #[test(tokio::test)]
 async fn hello_world() {
@@ -77,7 +75,7 @@ async fn hello_world() {
             );
 
             let iovec: &wasm_interpret::wasi::IoVec =
-                unsafe { memory.read(iovs as usize) }.expect("");
+                unsafe { memory.read_raw(iovs as usize) }.expect("");
 
             tracing::trace!("IOVec Buffer {:?} with len {:?}", iovec.buf, iovec.len);
 
@@ -94,7 +92,7 @@ async fn hello_world() {
                 2 => {
                     tracing::error!("Found Buffer {:?}", buffer_str);
                 }
-                other => {}
+                _ => todo!(),
             };
 
             memory

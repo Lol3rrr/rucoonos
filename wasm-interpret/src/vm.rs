@@ -6,16 +6,13 @@ use core::{
 
 use alloc::{boxed::Box, collections::BTreeMap, string::String, vec::Vec};
 
-use crate::{
+use wasm::{
     BlockType, Data, Element, ExportDescription, Func, FuncIndex, FunctionType, GlobalIndex,
     ImportDescription, Instruction, IntegerVariant, LocalIndex, MemArg, Module, NumberType,
     RefType, Section, TypeIndex, ValueType,
 };
 
-use self::{
-    handler::ExternalHandler,
-    state::{Blocks, OpStack},
-};
+use self::{handler::ExternalHandler, state::Blocks};
 
 pub mod handler;
 
@@ -25,98 +22,7 @@ use state::State;
 
 mod branch;
 mod call;
-
-pub struct HandleArguments<'s> {
-    stack: &'s mut OpStack,
-    arguments: usize,
-}
-
-impl<'s> HandleArguments<'s> {
-    /// The Number of Arguments passed to the Funtion
-    pub fn len(&self) -> usize {
-        self.arguments
-    }
-    pub fn is_empty(&self) -> bool {
-        self.arguments == 0
-    }
-
-    /// Gets the n-th Argument for the Function in the correct Order, according to the Function
-    /// Definition
-    pub fn get<'o>(&'o self, index: usize) -> Option<&'s StackValue>
-    where
-        'o: 's,
-    {
-        let target_index = self.stack.len() - self.arguments + index;
-        self.stack.get(target_index)
-    }
-}
-
-pub struct HandleMemory<'s> {
-    memory: &'s mut Vec<u8>,
-}
-
-impl<'s> HandleMemory<'s> {
-    pub fn grow(&mut self, n_size: usize) {
-        if self.memory.len() >= n_size {
-            return;
-        }
-
-        self.memory.resize(n_size, 0);
-    }
-
-    pub fn as_bytes(&self) -> &[u8] {
-        &self.memory
-    }
-
-    pub fn writestr(&mut self, addr: u32, data: &str) -> Result<(), ()> {
-        let raw = data.as_bytes();
-
-        if self.memory.len() < addr as usize + raw.len() {
-            return Err(());
-        }
-
-        self.memory[addr as usize..addr as usize + raw.len()].copy_from_slice(raw);
-        Ok(())
-    }
-    pub fn writei32(&mut self, addr: u32, data: i32) -> Result<(), ()> {
-        let raw = data.to_le_bytes();
-
-        if self.memory.len() < addr as usize + 4 {
-            return Err(());
-        }
-
-        self.memory[addr as usize..addr as usize + 4].copy_from_slice(&raw);
-        Ok(())
-    }
-
-    pub fn writeu32(&mut self, addr: u32, data: u32) -> Result<(), ()> {
-        let raw = data.to_le_bytes();
-
-        if self.memory.len() < addr as usize + 4 {
-            return Err(());
-        }
-
-        self.memory[addr as usize..addr as usize + 4].copy_from_slice(&raw);
-        Ok(())
-    }
-
-    pub unsafe fn read<'o, 't, T>(&'o self, addr: usize) -> Option<&'t T>
-    where
-        'o: 't,
-    {
-        let t_size = core::mem::size_of::<T>();
-        if self.memory.len() < addr + t_size {
-            return None;
-        }
-
-        let raw_memory = self.as_bytes();
-
-        let target_slice = &raw_memory[addr..addr + t_size];
-        let target_ptr = target_slice.as_ptr();
-
-        Some(unsafe { &*(target_ptr as *const T) })
-    }
-}
+mod op;
 
 pub struct Environment<EH> {
     external_handler: EH,
@@ -169,6 +75,7 @@ pub struct Interpreter<'m, EH> {
 
 #[derive(Debug, PartialEq)]
 pub enum RunErrorType {
+    MissingOperand,
     UnknownInitialFunction(String, FuncIndex),
     UnknownInstruction(Instruction),
     UnknownFuncName(String),
@@ -316,7 +223,7 @@ where
                 _ => None,
             })
             .enumerate()
-            .map(|(index, (imp, t))| (FuncIndex::from(index as u32), imp.nm.0.clone()))
+            .map(|(index, (imp, _))| (FuncIndex::from(index as u32), imp.nm.0.clone()))
             .collect::<BTreeMap<_, _>>();
 
         let tables = {
@@ -621,7 +528,7 @@ where
 
                         self.exec_state.op_stack.push(StackValue::I32(value));
                     }
-                    Instruction::LoadI32_8U(MemArg { align, offset }) => {
+                    Instruction::LoadI32_8U(MemArg { offset, .. }) => {
                         let span = tracing::span!(tracing::Level::TRACE, "LoadI32_8U");
                         let _guard = span.enter();
 
@@ -654,7 +561,7 @@ where
 
                         self.exec_state.op_stack.push(StackValue::I32(value));
                     }
-                    Instruction::LoadI32_16U(MemArg { align, offset }) => {
+                    Instruction::LoadI32_16U(MemArg { offset, .. }) => {
                         let span = tracing::span!(tracing::Level::TRACE, "LoadI32_16U");
                         let _guard = span.enter();
 
@@ -852,44 +759,20 @@ where
 
                         tracing::trace!("Subtract");
 
-                        match variant {
-                            IntegerVariant::I32 => {
-                                let second = match self.exec_state.op_stack.pop() {
-                                    Some(StackValue::I32(v)) => v,
-                                    _ => {
-                                        return Err(RunError {
-                                            err: RunErrorType::MismatchedTypes,
-                                            ctx: RunErrorContext {
-                                                instruction: Some(instr.clone()),
-                                            },
-                                        })
-                                    }
-                                };
-                                let first = match self.exec_state.op_stack.pop() {
-                                    Some(StackValue::I32(v)) => v,
-                                    _ => {
-                                        return Err(RunError {
-                                            err: RunErrorType::MismatchedTypes,
-                                            ctx: RunErrorContext {
-                                                instruction: Some(instr.clone()),
-                                            },
-                                        })
-                                    }
-                                };
-
-                                self.exec_state
-                                    .op_stack
-                                    .push(StackValue::I32(first - second));
+                        op::binary_op(&mut self.exec_state.op_stack, |first, second| {
+                            match (variant, first, second) {
+                                (IntegerVariant::I32, StackValue::I32(fv), StackValue::I32(sv)) => {
+                                    Ok(StackValue::I32(fv - sv))
+                                }
+                                _ => Err(RunErrorType::MismatchedTypes),
                             }
-                            IntegerVariant::I64 => {
-                                return Err(RunError {
-                                    err: RunErrorType::Other,
-                                    ctx: RunErrorContext {
-                                        instruction: Some(instr.clone()),
-                                    },
-                                })
-                            }
-                        };
+                        })
+                        .map_err(|ety| RunError {
+                            err: ety,
+                            ctx: RunErrorContext {
+                                instruction: Some(instr.clone()),
+                            },
+                        })?;
                     }
                     Instruction::AddI(variant) => {
                         let span = tracing::span!(tracing::Level::TRACE, "AddI");
@@ -897,64 +780,23 @@ where
 
                         tracing::trace!("Adding Integers {:?}", variant);
 
-                        match variant {
-                            IntegerVariant::I32 => {
-                                let second = match self.exec_state.op_stack.pop() {
-                                    Some(StackValue::I32(v)) => v,
-                                    _ => {
-                                        return Err(RunError {
-                                            err: RunErrorType::MismatchedTypes,
-                                            ctx: RunErrorContext {
-                                                instruction: Some(instr.clone()),
-                                            },
-                                        })
-                                    }
-                                };
-                                let first = match self.exec_state.op_stack.pop() {
-                                    Some(StackValue::I32(v)) => v,
-                                    _ => {
-                                        return Err(RunError {
-                                            err: RunErrorType::MismatchedTypes,
-                                            ctx: RunErrorContext {
-                                                instruction: Some(instr.clone()),
-                                            },
-                                        })
-                                    }
-                                };
-
-                                self.exec_state
-                                    .op_stack
-                                    .push(StackValue::I32(first + second));
+                        op::binary_op(&mut self.exec_state.op_stack, |first, second| {
+                            match (variant, first, second) {
+                                (IntegerVariant::I32, StackValue::I32(fv), StackValue::I32(sv)) => {
+                                    Ok(StackValue::I32(fv + sv))
+                                }
+                                (IntegerVariant::I64, StackValue::I64(fv), StackValue::I64(sv)) => {
+                                    Ok(StackValue::I64(fv + sv))
+                                }
+                                _ => Err(RunErrorType::MismatchedTypes),
                             }
-                            IntegerVariant::I64 => {
-                                let second = match self.exec_state.op_stack.pop() {
-                                    Some(StackValue::I64(v)) => v,
-                                    _ => {
-                                        return Err(RunError {
-                                            err: RunErrorType::MismatchedTypes,
-                                            ctx: RunErrorContext {
-                                                instruction: Some(instr.clone()),
-                                            },
-                                        })
-                                    }
-                                };
-                                let first = match self.exec_state.op_stack.pop() {
-                                    Some(StackValue::I64(v)) => v,
-                                    _ => {
-                                        return Err(RunError {
-                                            err: RunErrorType::MismatchedTypes,
-                                            ctx: RunErrorContext {
-                                                instruction: Some(instr.clone()),
-                                            },
-                                        })
-                                    }
-                                };
-
-                                self.exec_state
-                                    .op_stack
-                                    .push(StackValue::I64(first + second));
-                            }
-                        };
+                        })
+                        .map_err(|ety| RunError {
+                            err: ety,
+                            ctx: RunErrorContext {
+                                instruction: Some(instr.clone()),
+                            },
+                        })?;
                     }
                     Instruction::MulI(variant) => {
                         let span = tracing::span!(tracing::Level::TRACE, "MulI");
@@ -962,44 +804,20 @@ where
 
                         tracing::trace!("MulI Variant {:?}", variant);
 
-                        let second = match self.exec_state.op_stack.pop() {
-                            Some(s) => s,
-                            None => {
-                                return Err(RunError {
-                                    err: RunErrorType::Other,
-                                    ctx: RunErrorContext {
-                                        instruction: Some(instr.clone()),
-                                    },
-                                })
+                        op::binary_op(&mut self.exec_state.op_stack, |first, second| {
+                            match (variant, first, second) {
+                                (IntegerVariant::I32, StackValue::I32(fv), StackValue::I32(sv)) => {
+                                    Ok(StackValue::I32(fv * sv))
+                                }
+                                _ => Err(RunErrorType::MismatchedTypes),
                             }
-                        };
-                        let first = match self.exec_state.op_stack.pop() {
-                            Some(f) => f,
-                            None => {
-                                return Err(RunError {
-                                    err: RunErrorType::Other,
-                                    ctx: RunErrorContext {
-                                        instruction: Some(instr.clone()),
-                                    },
-                                })
-                            }
-                        };
-
-                        let res = match (variant, first, second) {
-                            (IntegerVariant::I32, StackValue::I32(fv), StackValue::I32(sv)) => {
-                                StackValue::I32(fv * sv)
-                            }
-                            _ => {
-                                return Err(RunError {
-                                    err: RunErrorType::MismatchedTypes,
-                                    ctx: RunErrorContext {
-                                        instruction: Some(instr.clone()),
-                                    },
-                                })
-                            }
-                        };
-
-                        self.exec_state.op_stack.push(res);
+                        })
+                        .map_err(|ety| RunError {
+                            err: ety,
+                            ctx: RunErrorContext {
+                                instruction: Some(instr.clone()),
+                            },
+                        })?;
                     }
                     Instruction::AndI(variant) => {
                         let span = tracing::span!(tracing::Level::TRACE, "AndI");
@@ -1007,44 +825,20 @@ where
 
                         tracing::trace!("AndI Variant {:?}", variant);
 
-                        let second = match self.exec_state.op_stack.pop() {
-                            Some(s) => s,
-                            None => {
-                                return Err(RunError {
-                                    err: RunErrorType::Other,
-                                    ctx: RunErrorContext {
-                                        instruction: Some(instr.clone()),
-                                    },
-                                })
+                        op::binary_op(&mut self.exec_state.op_stack, |first, second| {
+                            match (variant, first, second) {
+                                (IntegerVariant::I32, StackValue::I32(fv), StackValue::I32(sv)) => {
+                                    Ok(StackValue::I32(fv & sv))
+                                }
+                                _ => Err(RunErrorType::MismatchedTypes),
                             }
-                        };
-                        let first = match self.exec_state.op_stack.pop() {
-                            Some(f) => f,
-                            None => {
-                                return Err(RunError {
-                                    err: RunErrorType::Other,
-                                    ctx: RunErrorContext {
-                                        instruction: Some(instr.clone()),
-                                    },
-                                })
-                            }
-                        };
-
-                        let res = match (variant, first, second) {
-                            (IntegerVariant::I32, StackValue::I32(fv), StackValue::I32(sv)) => {
-                                StackValue::I32(fv & sv)
-                            }
-                            _ => {
-                                return Err(RunError {
-                                    err: RunErrorType::MismatchedTypes,
-                                    ctx: RunErrorContext {
-                                        instruction: Some(instr.clone()),
-                                    },
-                                })
-                            }
-                        };
-
-                        self.exec_state.op_stack.push(res);
+                        })
+                        .map_err(|ety| RunError {
+                            err: ety,
+                            ctx: RunErrorContext {
+                                instruction: Some(instr.clone()),
+                            },
+                        })?;
                     }
                     Instruction::OrI(variant) => {
                         let span = tracing::span!(tracing::Level::TRACE, "OrI");
@@ -1052,47 +846,23 @@ where
 
                         tracing::trace!("OrI Variant {:?}", variant);
 
-                        let second = match self.exec_state.op_stack.pop() {
-                            Some(s) => s,
-                            None => {
-                                return Err(RunError {
-                                    err: RunErrorType::Other,
-                                    ctx: RunErrorContext {
-                                        instruction: Some(instr.clone()),
-                                    },
-                                })
+                        op::binary_op(&mut self.exec_state.op_stack, |first, second| {
+                            match (variant, first, second) {
+                                (IntegerVariant::I32, StackValue::I32(fv), StackValue::I32(sv)) => {
+                                    Ok(StackValue::I32(fv | sv))
+                                }
+                                (IntegerVariant::I64, StackValue::I64(fv), StackValue::I64(sv)) => {
+                                    Ok(StackValue::I64(fv | sv))
+                                }
+                                _ => Err(RunErrorType::MismatchedTypes),
                             }
-                        };
-                        let first = match self.exec_state.op_stack.pop() {
-                            Some(f) => f,
-                            None => {
-                                return Err(RunError {
-                                    err: RunErrorType::Other,
-                                    ctx: RunErrorContext {
-                                        instruction: Some(instr.clone()),
-                                    },
-                                })
-                            }
-                        };
-
-                        let res = match (variant, first, second) {
-                            (IntegerVariant::I32, StackValue::I32(fv), StackValue::I32(sv)) => {
-                                StackValue::I32(fv | sv)
-                            }
-                            (IntegerVariant::I64, StackValue::I64(fv), StackValue::I64(sv)) => {
-                                StackValue::I64(fv | sv)
-                            }
-                            _ => {
-                                return Err(RunError {
-                                    err: RunErrorType::MismatchedTypes,
-                                    ctx: RunErrorContext {
-                                        instruction: Some(instr.clone()),
-                                    },
-                                })
-                            }
-                        };
-
-                        self.exec_state.op_stack.push(res);
+                        })
+                        .map_err(|ety| RunError {
+                            err: ety,
+                            ctx: RunErrorContext {
+                                instruction: Some(instr.clone()),
+                            },
+                        })?;
                     }
                     Instruction::XorI(variant) => {
                         let span = tracing::span!(tracing::Level::TRACE, "XorI");
@@ -1100,44 +870,20 @@ where
 
                         tracing::trace!("XorI Variant {:?}", variant);
 
-                        let second = match self.exec_state.op_stack.pop() {
-                            Some(s) => s,
-                            None => {
-                                return Err(RunError {
-                                    err: RunErrorType::Other,
-                                    ctx: RunErrorContext {
-                                        instruction: Some(instr.clone()),
-                                    },
-                                })
+                        op::binary_op(&mut self.exec_state.op_stack, |first, second| {
+                            match (variant, first, second) {
+                                (IntegerVariant::I32, StackValue::I32(fv), StackValue::I32(sv)) => {
+                                    Ok(StackValue::I32(fv ^ sv))
+                                }
+                                _ => Err(RunErrorType::MismatchedTypes),
                             }
-                        };
-                        let first = match self.exec_state.op_stack.pop() {
-                            Some(f) => f,
-                            None => {
-                                return Err(RunError {
-                                    err: RunErrorType::Other,
-                                    ctx: RunErrorContext {
-                                        instruction: Some(instr.clone()),
-                                    },
-                                })
-                            }
-                        };
-
-                        let res = match (variant, first, second) {
-                            (IntegerVariant::I32, StackValue::I32(fv), StackValue::I32(sv)) => {
-                                StackValue::I32(fv ^ sv)
-                            }
-                            _ => {
-                                return Err(RunError {
-                                    err: RunErrorType::MismatchedTypes,
-                                    ctx: RunErrorContext {
-                                        instruction: Some(instr.clone()),
-                                    },
-                                })
-                            }
-                        };
-
-                        self.exec_state.op_stack.push(res);
+                        })
+                        .map_err(|ety| RunError {
+                            err: ety,
+                            ctx: RunErrorContext {
+                                instruction: Some(instr.clone()),
+                            },
+                        })?;
                     }
                     Instruction::ShrUI(var) => {
                         let span = tracing::span!(tracing::Level::TRACE, "ShrUI");
@@ -1533,65 +1279,23 @@ where
 
                         tracing::trace!("Equal Integer Comparison");
 
-                        let second = match self.exec_state.op_stack.pop() {
-                            Some(s) => s,
-                            None => {
-                                return Err(RunError {
-                                    err: RunErrorType::Other,
-                                    ctx: RunErrorContext {
-                                        instruction: Some(instr.clone()),
-                                    },
-                                })
-                            }
-                        };
-                        let first = match self.exec_state.op_stack.pop() {
-                            Some(f) => f,
-                            None => {
-                                return Err(RunError {
-                                    err: RunErrorType::Other,
-                                    ctx: RunErrorContext {
-                                        instruction: Some(instr.clone()),
-                                    },
-                                })
-                            }
-                        };
-
-                        tracing::trace!("Equal: {:?} == {:?}", first, second);
-
-                        let res = match (var, first, second) {
-                            (
-                                IntegerVariant::I32,
-                                StackValue::I32(first),
-                                StackValue::I32(second),
-                            ) => {
-                                if first == second {
-                                    StackValue::I32(1)
-                                } else {
-                                    StackValue::I32(0)
+                        op::relation_op(&mut self.exec_state.op_stack, |first, second| {
+                            match (var, first, second) {
+                                (IntegerVariant::I32, StackValue::I32(fv), StackValue::I32(sv)) => {
+                                    Ok(fv == sv)
                                 }
-                            }
-                            (
-                                IntegerVariant::I64,
-                                StackValue::I64(first),
-                                StackValue::I64(second),
-                            ) => {
-                                if first == second {
-                                    StackValue::I32(1)
-                                } else {
-                                    StackValue::I32(0)
+                                (IntegerVariant::I64, StackValue::I64(fv), StackValue::I64(sv)) => {
+                                    Ok(fv == sv)
                                 }
+                                _ => Err(RunErrorType::MismatchedTypes),
                             }
-                            _ => {
-                                return Err(RunError {
-                                    err: RunErrorType::MismatchedTypes,
-                                    ctx: RunErrorContext {
-                                        instruction: Some(instr.clone()),
-                                    },
-                                })
-                            }
-                        };
-
-                        self.exec_state.op_stack.push(res);
+                        })
+                        .map_err(|ety| RunError {
+                            err: ety,
+                            ctx: RunErrorContext {
+                                instruction: Some(instr.clone()),
+                            },
+                        })?;
                     }
                     Instruction::NeI(var) => {
                         let span = tracing::span!(tracing::Level::TRACE, "NeI");
@@ -1599,65 +1303,23 @@ where
 
                         tracing::trace!("Not-Equal Integer Comparison");
 
-                        let second = match self.exec_state.op_stack.pop() {
-                            Some(s) => s,
-                            None => {
-                                return Err(RunError {
-                                    err: RunErrorType::Other,
-                                    ctx: RunErrorContext {
-                                        instruction: Some(instr.clone()),
-                                    },
-                                })
-                            }
-                        };
-                        let first = match self.exec_state.op_stack.pop() {
-                            Some(f) => f,
-                            None => {
-                                return Err(RunError {
-                                    err: RunErrorType::Other,
-                                    ctx: RunErrorContext {
-                                        instruction: Some(instr.clone()),
-                                    },
-                                })
-                            }
-                        };
-
-                        tracing::trace!("Not-Equal: {:?} != {:?}", first, second);
-
-                        let res = match (var, first, second) {
-                            (
-                                IntegerVariant::I32,
-                                StackValue::I32(first),
-                                StackValue::I32(second),
-                            ) => {
-                                if first != second {
-                                    StackValue::I32(1)
-                                } else {
-                                    StackValue::I32(0)
+                        op::relation_op(&mut self.exec_state.op_stack, |first, second| {
+                            match (var, first, second) {
+                                (IntegerVariant::I32, StackValue::I32(fv), StackValue::I32(sv)) => {
+                                    Ok(fv != sv)
                                 }
-                            }
-                            (
-                                IntegerVariant::I64,
-                                StackValue::I64(first),
-                                StackValue::I64(second),
-                            ) => {
-                                if first != second {
-                                    StackValue::I32(1)
-                                } else {
-                                    StackValue::I32(0)
+                                (IntegerVariant::I64, StackValue::I64(fv), StackValue::I64(sv)) => {
+                                    Ok(fv != sv)
                                 }
+                                _ => Err(RunErrorType::MismatchedTypes),
                             }
-                            _ => {
-                                return Err(RunError {
-                                    err: RunErrorType::MismatchedTypes,
-                                    ctx: RunErrorContext {
-                                        instruction: Some(instr.clone()),
-                                    },
-                                })
-                            }
-                        };
-
-                        self.exec_state.op_stack.push(res);
+                        })
+                        .map_err(|ety| RunError {
+                            err: ety,
+                            ctx: RunErrorContext {
+                                instruction: Some(instr.clone()),
+                            },
+                        })?;
                     }
                     Instruction::LtUI(var) => {
                         let span = tracing::span!(tracing::Level::TRACE, "LtUI");
@@ -1665,54 +1327,23 @@ where
 
                         tracing::trace!("Less Than Unsigned Integer Comparison");
 
-                        let second = match self.exec_state.op_stack.pop() {
-                            Some(s) => s,
-                            None => {
-                                return Err(RunError {
-                                    err: RunErrorType::Other,
-                                    ctx: RunErrorContext {
-                                        instruction: Some(instr.clone()),
-                                    },
-                                })
-                            }
-                        };
-                        let first = match self.exec_state.op_stack.pop() {
-                            Some(f) => f,
-                            None => {
-                                return Err(RunError {
-                                    err: RunErrorType::Other,
-                                    ctx: RunErrorContext {
-                                        instruction: Some(instr.clone()),
-                                    },
-                                })
-                            }
-                        };
-
-                        tracing::trace!("Less than unsigned: {:?} < {:?}", first, second);
-
-                        let res = match (var, first, second) {
-                            (
-                                IntegerVariant::I32,
-                                StackValue::I32(first),
-                                StackValue::I32(second),
-                            ) => {
-                                if (first as u32) < (second as u32) {
-                                    StackValue::I32(1)
-                                } else {
-                                    StackValue::I32(0)
+                        op::relation_op(&mut self.exec_state.op_stack, |first, second| {
+                            match (var, first, second) {
+                                (IntegerVariant::I32, StackValue::I32(fv), StackValue::I32(sv)) => {
+                                    Ok((fv as u32) < (sv as u32))
                                 }
+                                (IntegerVariant::I64, StackValue::I64(fv), StackValue::I64(sv)) => {
+                                    Ok((fv as u64) < (sv as u64))
+                                }
+                                _ => Err(RunErrorType::MismatchedTypes),
                             }
-                            _ => {
-                                return Err(RunError {
-                                    err: RunErrorType::MismatchedTypes,
-                                    ctx: RunErrorContext {
-                                        instruction: Some(instr.clone()),
-                                    },
-                                })
-                            }
-                        };
-
-                        self.exec_state.op_stack.push(res);
+                        })
+                        .map_err(|ety| RunError {
+                            err: ety,
+                            ctx: RunErrorContext {
+                                instruction: Some(instr.clone()),
+                            },
+                        })?;
                     }
                     Instruction::LtSI(var) => {
                         let span = tracing::span!(tracing::Level::TRACE, "LtSI");
@@ -1720,54 +1351,23 @@ where
 
                         tracing::trace!("Less Than Signed Integer Comparison");
 
-                        let second = match self.exec_state.op_stack.pop() {
-                            Some(s) => s,
-                            None => {
-                                return Err(RunError {
-                                    err: RunErrorType::Other,
-                                    ctx: RunErrorContext {
-                                        instruction: Some(instr.clone()),
-                                    },
-                                })
-                            }
-                        };
-                        let first = match self.exec_state.op_stack.pop() {
-                            Some(f) => f,
-                            None => {
-                                return Err(RunError {
-                                    err: RunErrorType::Other,
-                                    ctx: RunErrorContext {
-                                        instruction: Some(instr.clone()),
-                                    },
-                                })
-                            }
-                        };
-
-                        tracing::trace!("Less than Signed: {:?} < {:?}", first, second);
-
-                        let res = match (var, first, second) {
-                            (
-                                IntegerVariant::I32,
-                                StackValue::I32(first),
-                                StackValue::I32(second),
-                            ) => {
-                                if first < second {
-                                    StackValue::I32(1)
-                                } else {
-                                    StackValue::I32(0)
+                        op::relation_op(&mut self.exec_state.op_stack, |first, second| {
+                            match (var, first, second) {
+                                (IntegerVariant::I32, StackValue::I32(fv), StackValue::I32(sv)) => {
+                                    Ok(fv < sv)
                                 }
+                                (IntegerVariant::I64, StackValue::I64(fv), StackValue::I64(sv)) => {
+                                    Ok(fv < sv)
+                                }
+                                _ => Err(RunErrorType::MismatchedTypes),
                             }
-                            _ => {
-                                return Err(RunError {
-                                    err: RunErrorType::MismatchedTypes,
-                                    ctx: RunErrorContext {
-                                        instruction: Some(instr.clone()),
-                                    },
-                                })
-                            }
-                        };
-
-                        self.exec_state.op_stack.push(res);
+                        })
+                        .map_err(|ety| RunError {
+                            err: ety,
+                            ctx: RunErrorContext {
+                                instruction: Some(instr.clone()),
+                            },
+                        })?;
                     }
                     Instruction::LeSI(var) => {
                         let span = tracing::span!(tracing::Level::TRACE, "LeSI");
@@ -1775,54 +1375,23 @@ where
 
                         tracing::trace!("Less than or Equal Signed Integer Comparison");
 
-                        let second = match self.exec_state.op_stack.pop() {
-                            Some(s) => s,
-                            None => {
-                                return Err(RunError {
-                                    err: RunErrorType::Other,
-                                    ctx: RunErrorContext {
-                                        instruction: Some(instr.clone()),
-                                    },
-                                })
-                            }
-                        };
-                        let first = match self.exec_state.op_stack.pop() {
-                            Some(f) => f,
-                            None => {
-                                return Err(RunError {
-                                    err: RunErrorType::Other,
-                                    ctx: RunErrorContext {
-                                        instruction: Some(instr.clone()),
-                                    },
-                                })
-                            }
-                        };
-
-                        tracing::trace!("Less than or equal signed: {:?} <= {:?}", first, second);
-
-                        let res = match (var, first, second) {
-                            (
-                                IntegerVariant::I32,
-                                StackValue::I32(first),
-                                StackValue::I32(second),
-                            ) => {
-                                if first <= second {
-                                    StackValue::I32(1)
-                                } else {
-                                    StackValue::I32(0)
+                        op::relation_op(&mut self.exec_state.op_stack, |first, second| {
+                            match (var, first, second) {
+                                (IntegerVariant::I32, StackValue::I32(fv), StackValue::I32(sv)) => {
+                                    Ok(fv <= sv)
                                 }
+                                (IntegerVariant::I64, StackValue::I64(fv), StackValue::I64(sv)) => {
+                                    Ok(fv <= sv)
+                                }
+                                _ => Err(RunErrorType::MismatchedTypes),
                             }
-                            _ => {
-                                return Err(RunError {
-                                    err: RunErrorType::MismatchedTypes,
-                                    ctx: RunErrorContext {
-                                        instruction: Some(instr.clone()),
-                                    },
-                                })
-                            }
-                        };
-
-                        self.exec_state.op_stack.push(res);
+                        })
+                        .map_err(|ety| RunError {
+                            err: ety,
+                            ctx: RunErrorContext {
+                                instruction: Some(instr.clone()),
+                            },
+                        })?;
                     }
                     Instruction::LeUI(var) => {
                         let span = tracing::span!(tracing::Level::TRACE, "LeUI");
@@ -1830,54 +1399,23 @@ where
 
                         tracing::trace!("Less than or Equal Unsigned Integer Comparison");
 
-                        let second = match self.exec_state.op_stack.pop() {
-                            Some(s) => s,
-                            None => {
-                                return Err(RunError {
-                                    err: RunErrorType::Other,
-                                    ctx: RunErrorContext {
-                                        instruction: Some(instr.clone()),
-                                    },
-                                })
-                            }
-                        };
-                        let first = match self.exec_state.op_stack.pop() {
-                            Some(f) => f,
-                            None => {
-                                return Err(RunError {
-                                    err: RunErrorType::Other,
-                                    ctx: RunErrorContext {
-                                        instruction: Some(instr.clone()),
-                                    },
-                                })
-                            }
-                        };
-
-                        tracing::trace!("Less than or equal unsigned: {:?} <= {:?}", first, second);
-
-                        let res = match (var, first, second) {
-                            (
-                                IntegerVariant::I32,
-                                StackValue::I32(first),
-                                StackValue::I32(second),
-                            ) => {
-                                if (first as u32) <= (second as u32) {
-                                    StackValue::I32(1)
-                                } else {
-                                    StackValue::I32(0)
+                        op::relation_op(&mut self.exec_state.op_stack, |first, second| {
+                            match (var, first, second) {
+                                (IntegerVariant::I32, StackValue::I32(fv), StackValue::I32(sv)) => {
+                                    Ok((fv as u32) <= (sv as u32))
                                 }
+                                (IntegerVariant::I64, StackValue::I64(fv), StackValue::I64(sv)) => {
+                                    Ok((fv as u64) <= (sv as u64))
+                                }
+                                _ => Err(RunErrorType::MismatchedTypes),
                             }
-                            _ => {
-                                return Err(RunError {
-                                    err: RunErrorType::MismatchedTypes,
-                                    ctx: RunErrorContext {
-                                        instruction: Some(instr.clone()),
-                                    },
-                                })
-                            }
-                        };
-
-                        self.exec_state.op_stack.push(res);
+                        })
+                        .map_err(|ety| RunError {
+                            err: ety,
+                            ctx: RunErrorContext {
+                                instruction: Some(instr.clone()),
+                            },
+                        })?;
                     }
                     Instruction::GtUI(var) => {
                         let span = tracing::span!(tracing::Level::TRACE, "GtUI");
@@ -1885,54 +1423,23 @@ where
 
                         tracing::trace!("Greater Than Unsigned Integer Comparison");
 
-                        let second = match self.exec_state.op_stack.pop() {
-                            Some(s) => s,
-                            None => {
-                                return Err(RunError {
-                                    err: RunErrorType::Other,
-                                    ctx: RunErrorContext {
-                                        instruction: Some(instr.clone()),
-                                    },
-                                })
-                            }
-                        };
-                        let first = match self.exec_state.op_stack.pop() {
-                            Some(f) => f,
-                            None => {
-                                return Err(RunError {
-                                    err: RunErrorType::Other,
-                                    ctx: RunErrorContext {
-                                        instruction: Some(instr.clone()),
-                                    },
-                                })
-                            }
-                        };
-
-                        tracing::trace!("Greater Than: {:?} > {:?}", first, second);
-
-                        let res = match (var, first, second) {
-                            (
-                                IntegerVariant::I32,
-                                StackValue::I32(first),
-                                StackValue::I32(second),
-                            ) => {
-                                if (first as u32) > (second as u32) {
-                                    StackValue::I32(1)
-                                } else {
-                                    StackValue::I32(0)
+                        op::relation_op(&mut self.exec_state.op_stack, |first, second| {
+                            match (var, first, second) {
+                                (IntegerVariant::I32, StackValue::I32(fv), StackValue::I32(sv)) => {
+                                    Ok((fv as u32) > (sv as u32))
                                 }
+                                (IntegerVariant::I64, StackValue::I64(fv), StackValue::I64(sv)) => {
+                                    Ok((fv as u64) > (sv as u64))
+                                }
+                                _ => Err(RunErrorType::MismatchedTypes),
                             }
-                            _ => {
-                                return Err(RunError {
-                                    err: RunErrorType::MismatchedTypes,
-                                    ctx: RunErrorContext {
-                                        instruction: Some(instr.clone()),
-                                    },
-                                })
-                            }
-                        };
-
-                        self.exec_state.op_stack.push(res);
+                        })
+                        .map_err(|ety| RunError {
+                            err: ety,
+                            ctx: RunErrorContext {
+                                instruction: Some(instr.clone()),
+                            },
+                        })?;
                     }
                     Instruction::GeUI(var) => {
                         let span = tracing::span!(tracing::Level::TRACE, "GeUI");
@@ -1940,54 +1447,23 @@ where
 
                         tracing::trace!("Greater Than or Equal Unsigned Integer Comparison");
 
-                        let second = match self.exec_state.op_stack.pop() {
-                            Some(s) => s,
-                            None => {
-                                return Err(RunError {
-                                    err: RunErrorType::Other,
-                                    ctx: RunErrorContext {
-                                        instruction: Some(instr.clone()),
-                                    },
-                                })
-                            }
-                        };
-                        let first = match self.exec_state.op_stack.pop() {
-                            Some(f) => f,
-                            None => {
-                                return Err(RunError {
-                                    err: RunErrorType::Other,
-                                    ctx: RunErrorContext {
-                                        instruction: Some(instr.clone()),
-                                    },
-                                })
-                            }
-                        };
-
-                        tracing::trace!("Greater Than or Equal: {:?} >= {:?}", first, second);
-
-                        let res = match (var, first, second) {
-                            (
-                                IntegerVariant::I32,
-                                StackValue::I32(first),
-                                StackValue::I32(second),
-                            ) => {
-                                if (first as u32) >= (second as u32) {
-                                    StackValue::I32(1)
-                                } else {
-                                    StackValue::I32(0)
+                        op::relation_op(&mut self.exec_state.op_stack, |first, second| {
+                            match (var, first, second) {
+                                (IntegerVariant::I32, StackValue::I32(fv), StackValue::I32(sv)) => {
+                                    Ok((fv as u32) >= (sv as u32))
                                 }
+                                (IntegerVariant::I64, StackValue::I64(fv), StackValue::I64(sv)) => {
+                                    Ok((fv as u64) >= (sv as u64))
+                                }
+                                _ => Err(RunErrorType::MismatchedTypes),
                             }
-                            _ => {
-                                return Err(RunError {
-                                    err: RunErrorType::MismatchedTypes,
-                                    ctx: RunErrorContext {
-                                        instruction: Some(instr.clone()),
-                                    },
-                                })
-                            }
-                        };
-
-                        self.exec_state.op_stack.push(res);
+                        })
+                        .map_err(|ety| RunError {
+                            err: ety,
+                            ctx: RunErrorContext {
+                                instruction: Some(instr.clone()),
+                            },
+                        })?;
                     }
                     Instruction::Call(cid) => {
                         let span = tracing::span!(tracing::Level::TRACE, "Call");

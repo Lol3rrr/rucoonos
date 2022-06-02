@@ -1,5 +1,6 @@
 use test_log::test;
-use wasm_interpret::{vm, Module};
+use wasm::Module;
+use wasm_interpret::vm;
 
 #[test(tokio::test)]
 async fn func_call() {

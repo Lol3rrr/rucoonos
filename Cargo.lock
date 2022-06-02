@@ -394,6 +394,7 @@ dependencies = [
  "tracing",
  "uart_16550",
  "volatile 0.2.7",
+ "wasm",
  "wasm-interpret",
  "x86_64",
 ]
@@ -651,6 +652,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e4c2dbd44eb8b53973357e6e207e370f0c1059990df850aca1eca8947cf464f0"
 
 [[package]]
+name = "wasm"
+version = "0.1.0"
+
+[[package]]
 name = "wasm-interpret"
 version = "0.1.0"
 dependencies = [
@@ -659,6 +664,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "wasm",
 ]
 
 [[package]]

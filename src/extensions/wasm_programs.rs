@@ -1,7 +1,8 @@
 use alloc::boxed::Box;
 
 use kernel::Extension;
-use wasm_interpret::{vm, Module};
+use wasm::Module;
+use wasm_interpret::vm;
 
 pub struct WasmProgram<H> {
     data: &'static [u8],

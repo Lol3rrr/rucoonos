@@ -44,7 +44,7 @@ fn kernel_main(boot_info: &'static mut bootloader::BootInfo) -> ! {
     kernel.add_extension(crate::extensions::NetworkExtension::new());
 
     kernel.add_extension(crate::extensions::wasm_programs::WasmProgram::new(
-        wasm_interpret::vm::handler::ExternalHandlerConstant::new("other", |_| {
+        wasm_interpret::vm::handler::ExternalHandlerConstant::new("other", |_, _| {
             Box::pin(async move {
                 let mut result = Vec::new();
                 result.push(wasm_interpret::vm::StackValue::I32(7));

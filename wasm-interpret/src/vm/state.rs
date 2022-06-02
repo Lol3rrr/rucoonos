@@ -2,7 +2,7 @@ use core::marker::PhantomData;
 
 use alloc::{collections::BTreeMap, vec::Vec};
 
-use crate::{FuncIndex, Global, GlobalIndex, Instruction, LocalIndex};
+use wasm::{FuncIndex, Global, GlobalIndex, Instruction, LocalIndex};
 
 #[derive(Debug)]
 pub struct Block<'m> {

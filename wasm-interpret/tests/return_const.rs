@@ -1,4 +1,5 @@
-use wasm_interpret::{vm, Module};
+use wasm::Module;
+use wasm_interpret::vm;
 
 #[tokio::test]
 async fn return_const() {

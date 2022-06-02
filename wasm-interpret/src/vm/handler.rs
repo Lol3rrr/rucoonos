@@ -2,7 +2,10 @@ use core::{future::Future, marker::PhantomData, pin::Pin};
 
 use alloc::{boxed::Box, vec::Vec};
 
-use super::{HandleArguments, HandleMemory, StackValue};
+use super::{state::OpStack, StackValue};
+
+#[derive(Debug)]
+pub enum HandleError {}
 
 /// A Handler represents a way to provide external Functions to a WASM environment
 pub trait ExternalHandler: Sized {
@@ -16,17 +19,7 @@ pub trait ExternalHandler: Sized {
         name: &str,
         args: HandleArguments<'_>,
         mem: HandleMemory<'_>,
-    ) -> Result<Pin<Box<dyn Future<Output = Vec<StackValue>>>>, ()>;
-
-    fn switch<S>(self, sw: S) -> ExternalHandlerSwitch<S, Self>
-    where
-        S: Fn() -> bool,
-    {
-        ExternalHandlerSwitch {
-            switch: sw,
-            inner: self,
-        }
-    }
+    ) -> Result<Pin<Box<dyn Future<Output = Vec<StackValue>>>>, HandleError>;
 
     /// Chain `self` and `other` together.
     ///
@@ -61,14 +54,9 @@ impl ExternalHandler for ExternalHandlerEmpty {
         _: &str,
         _: HandleArguments<'_>,
         _: HandleMemory<'_>,
-    ) -> Result<Pin<Box<dyn Future<Output = Vec<StackValue>>>>, ()> {
+    ) -> Result<Pin<Box<dyn Future<Output = Vec<StackValue>>>>, HandleError> {
         Ok(Box::pin(async move { Vec::new() }))
     }
-}
-
-pub struct ExternalHandlerSwitch<S, I> {
-    switch: S,
-    inner: I,
 }
 
 pub struct ExternalHandlerChain<F, S> {
@@ -90,7 +78,7 @@ where
         name: &str,
         args: HandleArguments<'_>,
         mem: HandleMemory<'_>,
-    ) -> Result<Pin<Box<dyn Future<Output = Vec<StackValue>>>>, ()> {
+    ) -> Result<Pin<Box<dyn Future<Output = Vec<StackValue>>>>, HandleError> {
         if self.first.handles(name) {
             return self.first.handle(name, args, mem);
         }
@@ -130,7 +118,7 @@ where
         _: &str,
         args: HandleArguments<'_>,
         mem: HandleMemory<'_>,
-    ) -> Result<Pin<Box<dyn Future<Output = Vec<StackValue>>>>, ()> {
+    ) -> Result<Pin<Box<dyn Future<Output = Vec<StackValue>>>>, HandleError> {
         let result = (self.func)(args, mem);
         Ok(Box::pin(result))
     }
@@ -156,7 +144,7 @@ where
 }
 impl<F, FF> ExternalHandler for FallibleExternalHandler<F, FF>
 where
-    F: FnMut(HandleArguments<'_>, HandleMemory<'_>) -> Result<FF, ()>,
+    F: FnMut(HandleArguments<'_>, HandleMemory<'_>) -> Result<FF, HandleError>,
     FF: Future<Output = Vec<StackValue>> + 'static,
 {
     fn handles(&self, name: &str) -> bool {
@@ -165,11 +153,107 @@ where
 
     fn handle(
         &mut self,
-        name: &str,
+        _: &str,
         args: HandleArguments<'_>,
         mem: HandleMemory<'_>,
-    ) -> Result<Pin<Box<dyn Future<Output = Vec<StackValue>>>>, ()> {
+    ) -> Result<Pin<Box<dyn Future<Output = Vec<StackValue>>>>, HandleError> {
         (self.func)(args, mem)
             .map(|f| Box::pin(f) as Pin<Box<dyn Future<Output = Vec<StackValue>>>>)
+    }
+}
+
+pub struct HandleArguments<'s> {
+    pub(crate) stack: &'s mut OpStack,
+    pub(crate) arguments: usize,
+}
+
+impl<'s> HandleArguments<'s> {
+    /// The Number of Arguments passed to the Funtion
+    pub fn len(&self) -> usize {
+        self.arguments
+    }
+    pub fn is_empty(&self) -> bool {
+        self.arguments == 0
+    }
+
+    /// Gets the n-th Argument for the Function in the correct Order, according to the Function
+    /// Definition
+    pub fn get<'o>(&'o self, index: usize) -> Option<&'s StackValue>
+    where
+        'o: 's,
+    {
+        let target_index = self.stack.len() - self.arguments + index;
+        self.stack.get(target_index)
+    }
+}
+
+pub struct HandleMemory<'s> {
+    pub(crate) memory: &'s mut Vec<u8>,
+}
+
+impl<'s> HandleMemory<'s> {
+    pub fn grow(&mut self, n_size: usize) {
+        if self.memory.len() >= n_size {
+            return;
+        }
+
+        self.memory.resize(n_size, 0);
+    }
+
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.memory
+    }
+
+    pub fn writestr(&mut self, addr: u32, data: &str) -> Result<(), ()> {
+        let raw = data.as_bytes();
+
+        if self.memory.len() < addr as usize + raw.len() {
+            return Err(());
+        }
+
+        self.memory[addr as usize..addr as usize + raw.len()].copy_from_slice(raw);
+        Ok(())
+    }
+    pub fn writei32(&mut self, addr: u32, data: i32) -> Result<(), ()> {
+        let raw = data.to_le_bytes();
+
+        if self.memory.len() < addr as usize + 4 {
+            return Err(());
+        }
+
+        self.memory[addr as usize..addr as usize + 4].copy_from_slice(&raw);
+        Ok(())
+    }
+
+    pub fn writeu32(&mut self, addr: u32, data: u32) -> Result<(), ()> {
+        let raw = data.to_le_bytes();
+
+        if self.memory.len() < addr as usize + 4 {
+            return Err(());
+        }
+
+        self.memory[addr as usize..addr as usize + 4].copy_from_slice(&raw);
+        Ok(())
+    }
+
+    /// Attempts to read a Type from the Data at the given Address
+    ///
+    /// # Safety
+    /// TODO
+    pub unsafe fn read_raw<'o, 't, T>(&'o self, addr: usize) -> Option<&'t T>
+    where
+        'o: 't,
+    {
+        let t_size = core::mem::size_of::<T>();
+        if self.memory.len() < addr + t_size {
+            return None;
+        }
+
+        let raw_memory = self.as_bytes();
+
+        let target_slice = &raw_memory[addr..addr + t_size];
+        let target_ptr = target_slice.as_ptr();
+
+        Some(unsafe { &*(target_ptr as *const T) })
     }
 }
