@@ -1,8 +1,13 @@
-use core::{future::Future, marker::PhantomData, pin::Pin};
+use core::{
+    future::Future,
+    marker::PhantomData,
+    ops::{Index, IndexMut, Range},
+    pin::Pin,
+};
 
 use alloc::{boxed::Box, vec::Vec};
 
-use super::{state::OpStack, StackValue};
+use super::{memory, state::OpStack, StackValue};
 
 #[derive(Debug)]
 pub enum HandleError {
@@ -190,26 +195,22 @@ impl<'s> HandleArguments<'s> {
 }
 
 pub struct HandleMemory<'s> {
-    pub(crate) memory: &'s mut Vec<u8>,
+    pub(crate) memory: &'s mut dyn memory::Memory,
 }
 
 impl<'s> HandleMemory<'s> {
     pub fn grow(&mut self, n_size: usize) {
-        if self.memory.len() >= n_size {
+        if self.memory.size() >= n_size {
             return;
         }
 
-        self.memory.resize(n_size, 0);
-    }
-
-    pub fn as_bytes(&self) -> &[u8] {
-        &self.memory
+        self.memory.grow(n_size);
     }
 
     pub fn writestr(&mut self, addr: u32, data: &str) -> Result<(), ()> {
         let raw = data.as_bytes();
 
-        if self.memory.len() < addr as usize + raw.len() {
+        if self.memory.size() < addr as usize + raw.len() {
             return Err(());
         }
 
@@ -219,7 +220,7 @@ impl<'s> HandleMemory<'s> {
     pub fn writei32(&mut self, addr: u32, data: i32) -> Result<(), ()> {
         let raw = data.to_le_bytes();
 
-        if self.memory.len() < addr as usize + 4 {
+        if self.memory.size() < addr as usize + 4 {
             return Err(());
         }
 
@@ -230,7 +231,7 @@ impl<'s> HandleMemory<'s> {
     pub fn writeu32(&mut self, addr: u32, data: u32) -> Result<(), ()> {
         let raw = data.to_le_bytes();
 
-        if self.memory.len() < addr as usize + 4 {
+        if self.memory.size() < addr as usize + 4 {
             return Err(());
         }
 
@@ -247,15 +248,38 @@ impl<'s> HandleMemory<'s> {
         'o: 't,
     {
         let t_size = core::mem::size_of::<T>();
-        if self.memory.len() < addr + t_size {
+        if self.memory.size() < addr + t_size {
             return None;
         }
 
-        let raw_memory = self.as_bytes();
-
-        let target_slice = &raw_memory[addr..addr + t_size];
+        let target_slice = &self.memory[addr..addr + t_size];
         let target_ptr = target_slice.as_ptr();
 
         Some(unsafe { &*(target_ptr as *const T) })
+    }
+}
+
+impl<'m> Index<usize> for HandleMemory<'m> {
+    type Output = u8;
+
+    fn index(&self, index: usize) -> &Self::Output {
+        &self.memory[index]
+    }
+}
+impl<'m> IndexMut<usize> for HandleMemory<'m> {
+    fn index_mut(&mut self, index: usize) -> &mut Self::Output {
+        &mut self.memory[index]
+    }
+}
+impl<'m> Index<Range<usize>> for HandleMemory<'m> {
+    type Output = [u8];
+
+    fn index(&self, index: Range<usize>) -> &Self::Output {
+        &self.memory[index]
+    }
+}
+impl<'m> IndexMut<Range<usize>> for HandleMemory<'m> {
+    fn index_mut(&mut self, index: Range<usize>) -> &mut Self::Output {
+        &mut self.memory[index]
     }
 }

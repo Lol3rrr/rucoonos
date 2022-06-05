@@ -179,6 +179,7 @@ async fn logger(mut queue: nolock::queues::mpsc::jiffy::AsyncReceiver<Subscriber
                     Some(n) => n,
                     None => continue,
                 };
+
                 if let Some(last) = current_name.last() {
                     if last == exit_name {
                         current_name.pop();
@@ -188,7 +189,13 @@ async fn logger(mut queue: nolock::queues::mpsc::jiffy::AsyncReceiver<Subscriber
             SubscriberMessage::Event { content, level } => {
                 let name = current_name.last().copied().unwrap_or("");
 
-                println!("[{}][{}] {}", level, name, content);
+                let names: String = current_name
+                    .iter()
+                    .map(|s| *s)
+                    .flat_map(|s| ["[", s, "]"])
+                    .collect();
+
+                println!("[{}]{} {}", level, names, content);
             }
         };
     }

@@ -1,10 +1,14 @@
-use super::{handler::ExternalHandler, Blocks, Interpreter, StackValue};
+use super::{handler::ExternalHandler, memory, Blocks, Interpreter, StackValue};
 
-use alloc::vec::Vec;
+use alloc::{collections::binary_heap, vec::Vec};
 
-pub fn branch<'m, EH>(interpret: &mut Interpreter<'m, EH>, blocks: &mut Blocks<'m>, b_index: usize)
-where
+pub fn branch<'m, EH, M>(
+    interpret: &mut Interpreter<'m, EH, M>,
+    blocks: &mut Blocks<'m>,
+    b_index: usize,
+) where
     EH: ExternalHandler,
+    M: memory::Memory,
 {
     // 1.
     assert!(blocks.blocks.len() > b_index);
@@ -16,7 +20,7 @@ where
         );
 
     // 3.
-    let n = block.input_arity;
+    let n = block.output_arity;
 
     // 4.
     assert!(interpret.exec_state.op_stack.len() >= n);
@@ -34,6 +38,16 @@ where
     };
 
     // 6.
+    assert!(interpret.exec_state.op_stack.len() >= block.stack_height);
+    for _ in 0..(interpret.exec_state.op_stack.len() - block.stack_height) {
+        interpret.exec_state.op_stack.pop();
+    }
+    // for _ in 0..(b_index + 1) {
+    //     blocks.blocks.pop();
+    // }
+    blocks.blocks.truncate(blocks.blocks.len() - b_index - 1);
+
+    /*
     for i in 0..(b_index + 1) {
         while !matches!(
             interpret.exec_state.op_stack.last(),
@@ -49,9 +63,10 @@ where
 
         blocks.blocks.pop();
     }
+    */
 
     // 7.
-    for val in values {
+    for val in values.into_iter() {
         interpret.exec_state.op_stack.push(val);
     }
 }

@@ -14,7 +14,7 @@ async fn extern_func() {
     let handler = vm::handler::ExternalHandlerConstant::new("other", |_, _| async move {
         vec![vm::StackValue::I32(0)]
     });
-    let env = vm::Environment::new(handler);
+    let env = vm::Environment::new(handler, Vec::new());
     let mut interpreter = vm::Interpreter::new(env, &module);
 
     let compute_res = interpreter.run_with_wait("test", || None).await;

@@ -1,5 +1,5 @@
 pub const HEAP_START: usize = 0x_4444_4444_0000;
-pub const HEAP_SIZE: usize = 1 * 1024 * 1024 * 1; // 1 Mib of Heap Memory for the OS
+pub const HEAP_SIZE: usize = 1 * 1024 * 1024 * 5; // 1 Mib of Heap Memory for the OS
 
 use linked_list_allocator::LockedHeap;
 
@@ -13,6 +13,8 @@ use x86_64::{
     VirtAddr,
 };
 
+/// This will setup the Heap for our Kernel.
+/// This will create PageTable mappings as needed for the Heap and then initialize the Allocator
 pub fn init_heap(
     mapper: &mut impl Mapper<Size4KiB>,
     frame_allocator: &mut impl FrameAllocator<Size4KiB>,

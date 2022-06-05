@@ -76,9 +76,15 @@ impl Drop for IDTStorage {
     }
 }
 
+fn my_general_handler(stack_frame: InterruptStackFrame, index: u8, error_code: Option<u64>) {
+    todo!("handle irq {}", index)
+}
+
 lazy_static! {
     static ref INITIAL_IDT: InterruptDescriptorTable = {
         let mut idt = InterruptDescriptorTable::new();
+
+        x86_64::set_general_handler!(&mut idt, my_general_handler);
 
         idt.breakpoint.set_handler_fn(breakpoint_handler);
         unsafe {
@@ -86,9 +92,23 @@ lazy_static! {
                 .set_handler_fn(double_fault_handler)
                 .set_stack_index(gdt::DOUBLE_FAULT_IST_INDEX);
         }
-        idt.page_fault.set_handler_fn(page_fault_handler);
+        unsafe {
+            idt.page_fault
+                .set_handler_fn(page_fault_handler)
+                .set_stack_index(gdt::DOUBLE_FAULT_IST_INDEX);
+        }
+
         idt.general_protection_fault
             .set_handler_fn(general_protection_handler);
+        idt.security_exception
+            .set_handler_fn(security_exception_handler);
+        idt.segment_not_present
+            .set_handler_fn(missing_segment_handler);
+        idt.stack_segment_fault
+            .set_handler_fn(stack_segment_handler);
+        idt.invalid_tss.set_handler_fn(stack_segment_handler);
+        idt.divide_error.set_handler_fn(divide_handler);
+
         idt[InterruptIndex::Timer.as_usize()].set_handler_fn(timer::timer_interrupt_handler);
         idt[InterruptIndex::Keyboard.as_usize()]
             .set_handler_fn(keyboard::keyboard_interrupt_handler);
@@ -137,6 +157,21 @@ pub unsafe fn set_interrupt(line: usize, entry: HandlerFunc) {
 
         drop(old_idt);
     });
+}
+
+extern "x86-interrupt" fn divide_handler(stack_frame: InterruptStackFrame) {
+    println!("Divide Handler");
+}
+extern "x86-interrupt" fn stack_segment_handler(stack_frame: InterruptStackFrame, _: u64) {
+    println!("Stack Segment");
+}
+
+extern "x86-interrupt" fn missing_segment_handler(stack_frame: InterruptStackFrame, _: u64) {
+    println!("Missing Segment")
+}
+
+extern "x86-interrupt" fn security_exception_handler(stack_frame: InterruptStackFrame, _: u64) {
+    println!("Security Exception");
 }
 
 extern "x86-interrupt" fn breakpoint_handler(stack_frame: InterruptStackFrame) {

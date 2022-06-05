@@ -9,6 +9,7 @@ pub struct Block<'m> {
     pub input_arity: usize,
     pub output_arity: usize,
     iterator: BlockIterator<'m>,
+    pub stack_height: usize,
 }
 
 #[derive(Debug)]
@@ -50,16 +51,22 @@ impl<'m> Blocks<'m> {
         Self { blocks: Vec::new() }
     }
 
-    pub fn enter<I>(&mut self, iterator: I, input_arity: usize, output_arity: usize)
-    where
+    pub fn enter<I>(
+        &mut self,
+        iterator: I,
+        input_arity: usize,
+        output_arity: usize,
+        current_stack_height: usize,
+    ) where
         I: Into<BlockIterator<'m>>,
     {
-        tracing::trace!("Entered Block");
+        tracing::trace!("Entered Block with {} -> {}", input_arity, output_arity);
 
         self.blocks.push(Block {
             input_arity,
             output_arity,
             iterator: iterator.into(),
+            stack_height: current_stack_height,
         });
     }
 
@@ -79,19 +86,16 @@ impl<'m> Blocks<'m> {
                         .map(|_| op_stack.pop().expect(""))
                         .collect();
 
-                    match op_stack.pop() {
-                        Some(l) if l == StackValue::Block => {
-                            // End of Block reached
-                            op_stack.push(l);
-                        }
-                        Some(l) => {
-                            assert_eq!(0, self.blocks.len());
-                            op_stack.push(l);
-                        }
-                        None => {
-                            assert!(self.blocks.len() <= 1);
-                        }
-                    };
+                    tracing::trace!(
+                        "Op-Stack {:?} Entered with {:?}",
+                        op_stack.len(),
+                        latest.stack_height
+                    );
+                    assert!(op_stack.len() == latest.stack_height);
+
+                    for _ in 0..(op_stack.len() - latest.stack_height) {
+                        op_stack.pop();
+                    }
 
                     op_stack.extend(values.into_iter().rev());
 
@@ -138,7 +142,6 @@ struct StackFrame<'m> {
 pub enum StackValue {
     I32(i32),
     I64(i64),
-    Block,
 }
 
 impl<'m> State<'m> {

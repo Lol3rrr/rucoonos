@@ -11,7 +11,7 @@ async fn func_call() {
 
     let module = module.unwrap();
 
-    let env = vm::Environment::new(vm::handler::empty_handler());
+    let env = vm::Environment::new(vm::handler::empty_handler(), Vec::new());
     let mut interpreter = vm::Interpreter::new(env, &module);
 
     let compute_res = interpreter.run_with_wait("test", || None).await;

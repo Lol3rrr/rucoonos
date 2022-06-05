@@ -15,6 +15,8 @@ use kernel::Kernel;
 use rucoonos::extensions::networking::protocols;
 use rucoonos::*;
 
+use wasm_interpret::vm::handler::ExternalHandler;
+
 /// This function is called on panic.
 #[cfg(not(test))]
 #[panic_handler]
@@ -38,14 +40,124 @@ fn kernel_main(boot_info: &'static mut bootloader::BootInfo) -> ! {
 
     // Setup tracing for the Kernel
     kernel.add_extension(crate::extensions::LogExtension::new(
-        crate::extensions::logging::LogLevel::Trace,
+        crate::extensions::logging::LogLevel::Debug,
     ));
 
     kernel.add_extension(crate::extensions::NetworkExtension::new());
 
     kernel.add_extension(crate::extensions::wasm_programs::WasmProgram::new(
-        wasm_interpret::vm::handler::empty_handler(),
-        include_bytes!("../wasm-interpret/tests/extern_func.wasm"),
+        wasm_interpret::vm::handler::ExternalHandlerConstant::new(
+            "environ_sizes_get",
+            |mut args, mut memory| {
+                tracing::trace!("Called 'environ_sizes_get' with {:?} Arguments", args.len());
+
+                let env_size = match args.get(1).expect("") {
+                    wasm_interpret::vm::StackValue::I32(ptr) => *ptr,
+                    _ => todo!(),
+                };
+                let env_count = match args.get(0).expect("") {
+                    wasm_interpret::vm::StackValue::I32(ptr) => *ptr,
+                    _ => todo!(),
+                };
+
+                tracing::trace!("Arguments ({:?}, {:?})", env_count, env_size);
+
+                memory
+                    .writeu32(env_size as u32, "RUST_BACKTRACE=1".len() as u32 + 1)
+                    .expect("");
+                memory
+                    .writeu32(env_count as u32, "RUST_BACKTRACE=1".len() as u32 + 1)
+                    .expect("");
+
+                async move {
+                    let mut result = Vec::with_capacity(1);
+                    result.push(wasm_interpret::vm::StackValue::I32(0));
+                    result
+                }
+            },
+        )
+        .chain(wasm_interpret::vm::handler::ExternalHandlerConstant::new(
+            "environ_get",
+            |args, mut memory| {
+                let environ = match args.get(0) {
+                    Some(wasm_interpret::vm::StackValue::I32(addr)) => *addr,
+                    _ => todo!(),
+                };
+                let environ_buf = match args.get(1) {
+                    Some(wasm_interpret::vm::StackValue::I32(addr)) => *addr,
+                    _ => todo!(),
+                };
+
+                tracing::debug!("Environ: 0x{:x} Environ-Buf: 0x{:x}", environ, environ_buf);
+
+                memory.writestr(environ as u32, "RUST_BACKTRACE=1\0");
+                memory.writestr(environ_buf as u32, "RUST_BACKTRACE=1\0");
+
+                async move {
+                    let mut result = Vec::with_capacity(1);
+                    result.push(wasm_interpret::vm::StackValue::I32(0));
+                    result
+                }
+            },
+        ))
+        .chain(wasm_interpret::vm::handler::FallibleExternalHandler::new(
+            "fd_write",
+            |mut args, mut memory| {
+                let retptr0 = match args.get(3) {
+                    Some(wasm_interpret::vm::StackValue::I32(v)) => *v,
+                    _ => todo!(),
+                };
+                let iovs_len = args.get(2);
+                let iovs = match args.get(1) {
+                    Some(wasm_interpret::vm::StackValue::I32(v)) => *v,
+                    _ => todo!(),
+                };
+                let fd = match args.get(0) {
+                    Some(wasm_interpret::vm::StackValue::I32(v)) => *v,
+                    _ => todo!(),
+                };
+
+                tracing::trace!(
+                    "Called FD_write with fd={:?} iovs={:?} iovs_len={:?} retptr={:?}",
+                    fd,
+                    iovs,
+                    iovs_len,
+                    retptr0
+                );
+
+                tracing::debug!("Got {:?} IOVs", iovs_len);
+
+                let iovec: &wasm_interpret::wasi::IoVec =
+                    unsafe { memory.read_raw(iovs as usize) }.expect("");
+
+                tracing::debug!("IOVec Buffer {:?} with len {:?}", iovec.buf, iovec.len);
+
+                let str_addr = iovec.buf as usize;
+                let str_addr_end = str_addr + iovec.len as usize;
+
+                let str_slice = &memory[str_addr..str_addr_end];
+                let buffer_str = core::str::from_utf8(str_slice).unwrap();
+
+                match fd {
+                    1 => {
+                        tracing::info!("Found Buffer {:?}", buffer_str);
+                    }
+                    2 => {
+                        tracing::error!("Found Buffer {:?}", buffer_str);
+                    }
+                    _ => todo!(),
+                };
+
+                memory.writeu32(retptr0 as u32, iovec.len).expect("");
+
+                Ok(async move {
+                    let mut result = Vec::with_capacity(1);
+                    result.push(wasm_interpret::vm::StackValue::I32(0));
+                    result
+                })
+            },
+        )),
+        include_bytes!("../wasm-interpret/tests/hello-world.wasm"),
         "test",
     ));
 
@@ -103,7 +215,7 @@ fn kernel_main(boot_info: &'static mut bootloader::BootInfo) -> ! {
     #[cfg(not(test))]
     {
         let k_handle = kernel.handle();
-        // k_handle.add_task(tetris());
+        k_handle.add_task(tetris());
         k_handle.add_task(ping([192, 168, 178, 20]));
 
         /*
@@ -112,7 +224,7 @@ fn kernel_main(boot_info: &'static mut bootloader::BootInfo) -> ! {
         }
         */
 
-        kernel.run();
+        kernel.run(x86_64::instructions::hlt);
     }
 
     #[cfg(test)]

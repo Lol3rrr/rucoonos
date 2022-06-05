@@ -298,7 +298,7 @@ checksum = "1a360dadbeed91a0cbd15722c72d3804c86926805b8cdb5ef1b512ede87f3de6"
 [[package]]
 name = "nolock"
 version = "0.4.0"
-source = "git+https://github.com/Lol3rrr/nolock.git?rev=6d6df6cdd6ee890d0cf578ab9ee02769544bacdd#6d6df6cdd6ee890d0cf578ab9ee02769544bacdd"
+source = "git+https://github.com/Lol3rrr/nolock.git?rev=c333c1e901b2e921dbc8015030bce9155e345a85#c333c1e901b2e921dbc8015030bce9155e345a85"
 dependencies = [
  "futures",
  "loom",
@@ -330,6 +330,10 @@ name = "pin-utils"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8b870d8c151b6f2fb93e84a13146138f05d02ed11c7e7c54f8826aaaf7c9f184"
+
+[[package]]
+name = "print-envs"
+version = "0.1.0"
 
 [[package]]
 name = "proc-macro2"
@@ -387,7 +391,7 @@ dependencies = [
  "kernel",
  "lazy_static",
  "linked_list_allocator",
- "nolock 0.4.0 (git+https://github.com/Lol3rrr/nolock.git?rev=6d6df6cdd6ee890d0cf578ab9ee02769544bacdd)",
+ "nolock 0.4.0 (git+https://github.com/Lol3rrr/nolock.git?rev=c333c1e901b2e921dbc8015030bce9155e345a85)",
  "pic8259",
  "rucoon",
  "spin 0.9.2",
@@ -660,6 +664,7 @@ name = "wasm-interpret"
 version = "0.1.0"
 dependencies = [
  "env_logger",
+ "rucoon",
  "test-log",
  "tokio",
  "tracing",

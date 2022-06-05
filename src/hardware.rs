@@ -7,7 +7,13 @@ use crate::{
 
 use alloc::vec::Vec;
 use bootloader::boot_info::Optional;
-use x86_64::{structures::paging::OffsetPageTable, VirtAddr};
+use x86_64::{
+    structures::paging::{
+        mapper::MapToError, page::PageRangeInclusive, FrameAllocator, Mapper, OffsetPageTable,
+        Page, PageSize, PageTableFlags, Size4KiB,
+    },
+    VirtAddr,
+};
 
 mod allocator;
 pub mod device;
@@ -15,6 +21,7 @@ mod pci;
 mod rng;
 
 static MEMORY_MAPPING: spin::Once<OffsetPageTable> = spin::Once::new();
+static FRAME_ALLOCATOR: spin::Once<spin::Mutex<BootInfoFrameAllocator>> = spin::Once::new();
 
 static KERNEL_INSTANCE: spin::Once<Hardware> = spin::Once::new();
 
@@ -82,7 +89,7 @@ impl Hardware {
     fn memory_setup(
         physical_memory_offset: Optional<u64>,
         memory_regions: &'static mut bootloader::boot_info::MemoryRegions,
-    ) -> OffsetPageTable {
+    ) -> (OffsetPageTable, BootInfoFrameAllocator) {
         println!("Initialize Memory and Allocator...");
 
         let mem_offsets = physical_memory_offset.as_ref().unwrap();
@@ -90,12 +97,30 @@ impl Hardware {
         let mut mapper = unsafe { memory::init(phys_mem_offset) };
         let mut frame_allocator = unsafe { BootInfoFrameAllocator::init(memory_regions) };
 
+        // Increase thes tack-size to avoid Stack-Overflows with large Futures in our Kernel
+        let start_page = Page::containing_address(x86_64::VirtAddr::new(0x7ffff00000));
+        let end_page = Page::containing_address(x86_64::VirtAddr::new(0x7fffffffff));
+        for page in Page::range_inclusive(start_page, end_page) {
+            let frame = frame_allocator
+                .allocate_frame()
+                .ok_or(MapToError::<Size4KiB>::FrameAllocationFailed)
+                .unwrap();
+
+            let flags = PageTableFlags::PRESENT | PageTableFlags::WRITABLE;
+            unsafe {
+                mapper
+                    .map_to(page, frame, flags, &mut frame_allocator)
+                    .unwrap()
+                    .flush()
+            };
+        }
+
         allocator::init_heap(&mut mapper, &mut frame_allocator)
             .expect("heap initialization failed");
 
         println!("Initialized Memory and Allocator");
 
-        mapper
+        (mapper, frame_allocator)
     }
 
     pub fn pci_devices(&self) -> impl Iterator<Item = pci::Device> {
@@ -140,11 +165,12 @@ impl Hardware {
 
         Self::video_init(&mut boot_info.framebuffer);
 
-        let mapper = Self::memory_setup(
+        let (mapper, frame_alloc) = Self::memory_setup(
             boot_info.physical_memory_offset.clone(),
             &mut boot_info.memory_regions,
         );
         MEMORY_MAPPING.call_once(|| mapper);
+        FRAME_ALLOCATOR.call_once(|| spin::Mutex::new(frame_alloc));
 
         let devices = Self::setup_pci(boot_info.physical_memory_offset.clone());
 
@@ -226,5 +252,12 @@ impl Hardware {
 
     pub fn get_rand(&self) -> u64 {
         x86_64::instructions::interrupts::without_interrupts(|| self.rng.lock().rand())
+    }
+
+    pub fn get_memory_mapping(&self) -> Option<&OffsetPageTable> {
+        MEMORY_MAPPING.get()
+    }
+    pub fn get_frame_allocator() -> Option<&'static spin::mutex::Mutex<BootInfoFrameAllocator>> {
+        FRAME_ALLOCATOR.get()
     }
 }

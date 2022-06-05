@@ -41,6 +41,9 @@ pub struct BootInfoFrameAllocator {
     next: usize,
 }
 
+unsafe impl Sync for BootInfoFrameAllocator {}
+unsafe impl Send for BootInfoFrameAllocator {}
+
 impl BootInfoFrameAllocator {
     /// Create a FrameAllocator from the passed memory map.
     ///
@@ -56,6 +59,8 @@ impl BootInfoFrameAllocator {
 }
 
 use bootloader::boot_info::MemoryRegionKind;
+
+use crate::println;
 
 impl BootInfoFrameAllocator {
     /// Returns an iterator over the usable frames specified in the memory map.

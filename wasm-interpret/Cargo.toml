@@ -9,6 +9,8 @@ edition = "2021"
 wasm = { path = "../wasm" }
 tracing = { version = "0.1", default_features = false, features = ["attributes"] }
 
+rucoon = { path = "../../rucoon" }
+
 [dev-dependencies]
 tokio = { version = "1.18", default_features = false, features = ["macros", "rt"] }
 test-log = { version = "0.2", features = ["trace"] }

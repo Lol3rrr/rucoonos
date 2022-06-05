@@ -4,21 +4,23 @@ use crate::vm::{
 };
 
 use super::{
-    handler::ExternalHandler, Function, Interpreter, RunError, RunErrorContext, RunErrorType,
+    handler::ExternalHandler, memory, Function, Interpreter, RunError, RunErrorContext,
+    RunErrorType,
 };
 
 use wasm::{FuncIndex, Instruction};
 
 use alloc::string::String;
 
-pub(super) async fn call<'m, EH>(
-    interpret: &mut Interpreter<'m, EH>,
+pub(super) async fn call<'m, EH, M>(
+    interpret: &mut Interpreter<'m, EH, M>,
     func_id: FuncIndex,
     blocks: &mut Blocks<'m>,
     instr: &Instruction,
 ) -> Result<(), RunError>
 where
     EH: ExternalHandler,
+    M: memory::Memory,
 {
     match interpret.functions.get(&func_id) {
         Some(Function::Internal(f, t)) => {
@@ -33,10 +35,13 @@ where
 
             let old_blocks = core::mem::replace(blocks, Blocks::new());
 
+            let current_stack = interpret.exec_state.op_stack.len() - t.input.elements.items.len();
+
             blocks.enter(
                 f.exp.instructions.iter().skip(0),
                 t.input.elements.items.len(),
                 t.output.elements.items.len(),
+                current_stack,
             );
 
             let loc = interpret.locals(func);

@@ -8,6 +8,7 @@ use alloc::{boxed::Box, sync::Arc, vec::Vec};
 extern crate alloc;
 
 mod task;
+use nolock::queues::DequeueError;
 use task::Task;
 
 mod handle;
@@ -82,13 +83,20 @@ impl<H> Kernel<H> {
         &self.hardware
     }
 
-    pub fn run(mut self) {
+    // #[inline(always)]
+    pub fn run(mut self, wait: fn()) {
         loop {
-            let run_id = match self.queue.recv.dequeue() {
-                Some(e) => e,
-                None => {
-                    tracing::error!("Queue was closed");
-                    return;
+            let run_id = loop {
+                match self.queue.recv.try_dequeue() {
+                    Ok(i) => break i,
+                    Err(DequeueError::Empty) => {
+                        wait();
+                        continue;
+                    }
+                    Err(e) => {
+                        tracing::error!("Queue was closed {:?}", e);
+                        return;
+                    }
                 }
             };
 
@@ -107,6 +115,8 @@ impl<H> Kernel<H> {
             match entry.run(&self.queue_sender) {
                 Poll::Ready(_) => {
                     tracing::error!("Done with Task");
+
+                    // self.tasks.remove(index);
                 }
                 Poll::Pending => {}
             };
