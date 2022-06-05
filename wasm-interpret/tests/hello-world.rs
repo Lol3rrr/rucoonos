@@ -43,15 +43,13 @@ async fn hello_world() {
 
             tracing::trace!("Arguments ({:?}, {:?})", env_count, env_size);
 
-            memory.writeu32(env_size as u32, 0).expect("");
-            memory.writeu32(env_count as u32, 0).expect("");
+            memory[env_size as usize] = 0;
+            memory[env_count as usize] = 0;
 
             async move { vec![vm::StackValue::I32(0)] }
         });
     let fd_write_handler =
         vm::handler::ExternalHandlerConstant::new("fd_write", |args, mut memory| {
-            logged.store(true, Ordering::SeqCst);
-
             let retptr0 = match args.get(3) {
                 Some(vm::StackValue::I32(v)) => *v,
                 _ => todo!(),
@@ -85,6 +83,8 @@ async fn hello_world() {
             let str_slice = &memory[str_addr..str_addr_end];
             let buffer_str = core::str::from_utf8(str_slice).unwrap();
 
+            logged.store(buffer_str == "Hello, world!\n", Ordering::SeqCst);
+
             match fd {
                 1 => {
                     tracing::info!("Found Buffer {:?}", buffer_str);
@@ -95,9 +95,7 @@ async fn hello_world() {
                 _ => todo!(),
             };
 
-            memory
-                .writeu32(retptr0 as u32, buffer_str.len() as u32)
-                .expect("");
+            memory.writeu32(retptr0 as u32, iovec.len).expect("");
 
             async move { vec![vm::StackValue::I32(0)] }
         });

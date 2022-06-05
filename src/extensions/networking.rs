@@ -90,8 +90,6 @@ impl kernel::Extension<&Hardware> for NetworkExtension {
             .enumerate()
             .filter_map(|(id, header)| {
                 if header.generic.id == 0x100E && header.generic.vendor_id == 0x8086 {
-                    println!("E1000 Networking Controller: {:?}", header);
-
                     match hardware::device::E1000Driver::new(id, header, offset) {
                         Ok((n_device, meta, n_queue)) => Some((
                             hardware::device::NetworkDevice {

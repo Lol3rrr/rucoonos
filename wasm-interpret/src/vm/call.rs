@@ -1,6 +1,6 @@
 use crate::vm::{
     handler::{HandleArguments, HandleMemory},
-    state::Blocks,
+    state::{BlockIterator, Blocks},
 };
 
 use super::{
@@ -25,7 +25,8 @@ where
     match interpret.functions.get(&func_id) {
         Some(Function::Internal(f, t)) => {
             tracing::trace!(
-                "Calling Internal Function {:?} -> {:?} with {:?} Locals",
+                "Calling Internal Function({:?}) {:?} -> {:?} with {:?} Locals",
+                func_id,
                 t.input.elements.items,
                 t.output.elements.items,
                 f.locals.items,
@@ -38,7 +39,7 @@ where
             let current_stack = interpret.exec_state.op_stack.len() - t.input.elements.items.len();
 
             blocks.enter(
-                f.exp.instructions.iter().skip(0),
+                BlockIterator::block(f.exp.instructions.iter()),
                 t.input.elements.items.len(),
                 t.output.elements.items.len(),
                 current_stack,

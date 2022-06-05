@@ -29,6 +29,7 @@ use core::{
 
 use alloc::{boxed::Box, collections::BTreeMap, string::String, vec::Vec};
 use kernel::Kernel;
+use tracing::span;
 
 use crate::println;
 
@@ -140,8 +141,19 @@ impl tracing::Subscriber for SerialSubscriber {
             .enqueue(SubscriberMessage::Exit(span.clone()))
             .expect("The Queue should always work");
     }
+
+    fn clone_span(&self, id: &span::Id) -> span::Id {
+        // TODO
+        id.clone()
+    }
+    fn try_close(&self, id: span::Id) -> bool {
+        // TODO
+        false
+    }
 }
 
+/// Creates the Tracing Subscriber and Writer Future to output the generated logs over the Serial
+/// interface
 fn serial(level: LogLevel) -> (SerialSubscriber, impl Future<Output = ()>) {
     let (recv, send) = nolock::queues::mpsc::jiffy::async_queue();
 
@@ -151,11 +163,12 @@ fn serial(level: LogLevel) -> (SerialSubscriber, impl Future<Output = ()>) {
             id_counter: AtomicU64::new(1),
             level,
         },
-        logger(recv),
+        serial_logger(recv),
     )
 }
 
-async fn logger(mut queue: nolock::queues::mpsc::jiffy::AsyncReceiver<SubscriberMessage>) {
+/// Listens for new Log-Events on the given Queue and outputs them over serial in the correct format
+async fn serial_logger(mut queue: nolock::queues::mpsc::jiffy::AsyncReceiver<SubscriberMessage>) {
     let mut span_names: BTreeMap<u64, &'static str> = BTreeMap::new();
 
     let mut current_name: Vec<&'static str> = Vec::new();
@@ -166,14 +179,19 @@ async fn logger(mut queue: nolock::queues::mpsc::jiffy::AsyncReceiver<Subscriber
         };
 
         match entry {
+            // A new Span was created so we should register its ID and Name
             SubscriberMessage::NewSpan { id, name } => {
                 span_names.insert(id.into_u64(), name);
             }
+            // A span has been entered so we will push its name to the Top of the Name-Stack as it
+            // is now the most recent Name for the logging Context
             SubscriberMessage::Enter(id) => {
                 if let Some(name) = span_names.get(&id.into_u64()) {
                     current_name.push(name);
                 }
             }
+            // A span has been exited so we should remove it from the top of the Name stack as it
+            // is now no longer relevant for this context
             SubscriberMessage::Exit(id) => {
                 let exit_name = match span_names.get(&id.into_u64()) {
                     Some(n) => n,
@@ -186,6 +204,7 @@ async fn logger(mut queue: nolock::queues::mpsc::jiffy::AsyncReceiver<Subscriber
                     }
                 }
             }
+            // Some event occured that should be logged
             SubscriberMessage::Event { content, level } => {
                 let name = current_name.last().copied().unwrap_or("");
 

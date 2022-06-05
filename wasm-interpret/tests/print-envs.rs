@@ -2,7 +2,7 @@ use std::{
     future::Future,
     pin::Pin,
     sync::{
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
         Arc,
     },
 };
@@ -21,7 +21,7 @@ async fn print_env() {
     let module = module.unwrap();
     dbg!(module.exports().collect::<Vec<_>>());
 
-    let logged = Arc::new(AtomicBool::new(false));
+    let logged = Arc::new(AtomicUsize::new(0));
 
     let proc_exit_handler = vm::handler::FallibleExternalHandler::<
         _,
@@ -42,8 +42,11 @@ async fn print_env() {
 
             tracing::trace!("Arguments ({:?}, {:?})", env_count, env_size);
 
-            memory.writeu32(env_size as u32, 5).expect("");
-            memory.writeu32(env_count as u32, 1).expect("");
+            memory[env_size as usize] = 5;
+            memory[env_count as usize] = 1;
+
+            //memory.writeu32(env_size as u32, 5).expect("");
+            //memory.writeu32(env_count as u32, 1).expect("");
 
             async move { vec![vm::StackValue::I32(0)] }
         });
@@ -58,6 +61,7 @@ async fn print_env() {
         };
 
         println!("Environ: x{:x}  Environ-Buf: 0x{:x}", environ, environ_buf);
+        println!("Environ 0x{:x}", memory[environ_buf as usize]);
 
         let base_addr = environ_buf as usize;
         memory[base_addr] = b't';
@@ -65,18 +69,14 @@ async fn print_env() {
         memory[base_addr + 2] = b'=';
         memory[base_addr + 3] = b'l';
         memory[base_addr + 4] = b's';
-        memory[base_addr + 5] = 0;
+        memory[base_addr + 5] = b'\0';
 
         memory.writei32(environ as u32, environ_buf);
-
-        // todo!();
 
         async move { vec![vm::StackValue::I32(0)] }
     });
     let fd_write_handler =
         vm::handler::ExternalHandlerConstant::new("fd_write", |args, mut memory| {
-            logged.store(true, Ordering::SeqCst);
-
             let retptr0 = match args.get(3) {
                 Some(vm::StackValue::I32(v)) => *v,
                 _ => todo!(),
@@ -110,7 +110,9 @@ async fn print_env() {
             let str_slice = &memory[str_addr..str_addr_end];
             let buffer_str = core::str::from_utf8(str_slice).unwrap();
 
-            println!("FD-Write");
+            if buffer_str == "te\n" || buffer_str == "ls\n" {
+                logged.fetch_add(1, Ordering::SeqCst);
+            }
 
             match fd {
                 1 => {
@@ -141,5 +143,5 @@ async fn print_env() {
     dbg!(&compute_res);
 
     assert_eq!(Ok(vec![]), compute_res);
-    assert!(logged.load(Ordering::SeqCst));
+    assert_eq!(2, logged.load(Ordering::SeqCst));
 }

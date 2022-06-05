@@ -125,12 +125,8 @@ fn kernel_main(boot_info: &'static mut bootloader::BootInfo) -> ! {
                     retptr0
                 );
 
-                tracing::debug!("Got {:?} IOVs", iovs_len);
-
                 let iovec: &wasm_interpret::wasi::IoVec =
                     unsafe { memory.read_raw(iovs as usize) }.expect("");
-
-                tracing::debug!("IOVec Buffer {:?} with len {:?}", iovec.buf, iovec.len);
 
                 let str_addr = iovec.buf as usize;
                 let str_addr_end = str_addr + iovec.len as usize;

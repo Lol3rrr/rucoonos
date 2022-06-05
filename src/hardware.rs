@@ -147,7 +147,7 @@ impl Hardware {
                 )
             })
             .filter_map(|header| {
-                println!("Unknown PCI-Device: {:?}", header);
+                // println!("Unknown PCI-Device: {:?}", header);
                 None
             })
             .collect()

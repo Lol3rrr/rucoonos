@@ -1,6 +1,6 @@
-use super::{handler::ExternalHandler, memory, Blocks, Interpreter, StackValue};
+use super::{handler::ExternalHandler, memory, Blocks, Interpreter};
 
-use alloc::{collections::binary_heap, vec::Vec};
+use alloc::vec::Vec;
 
 pub fn branch<'m, EH, M>(
     interpret: &mut Interpreter<'m, EH, M>,
@@ -11,13 +11,14 @@ pub fn branch<'m, EH, M>(
     M: memory::Memory,
 {
     // 1.
-    assert!(blocks.blocks.len() > b_index);
+    assert!(blocks.blocks.len() > b_index + 1);
 
     // 2.
     let block =
-        blocks.blocks.iter().rev().nth(b_index).expect(
+        blocks.blocks.iter_mut().rev().nth(b_index).expect(
             "There should be at least this many blocks because we previously asserted this",
         );
+    block.jump_to_continuation();
 
     // 3.
     let n = block.output_arity;
@@ -42,10 +43,10 @@ pub fn branch<'m, EH, M>(
     for _ in 0..(interpret.exec_state.op_stack.len() - block.stack_height) {
         interpret.exec_state.op_stack.pop();
     }
-    // for _ in 0..(b_index + 1) {
-    //     blocks.blocks.pop();
-    // }
-    blocks.blocks.truncate(blocks.blocks.len() - b_index - 1);
+    for _ in 0..(b_index) {
+        blocks.blocks.pop();
+    }
+    // blocks.blocks.truncate(blocks.blocks.len() - b_index - 1);
 
     /*
     for i in 0..(b_index + 1) {

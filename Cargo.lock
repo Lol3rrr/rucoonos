@@ -92,6 +92,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "fibonacci"
+version = "0.1.0"
+
+[[package]]
 name = "func_call"
 version = "0.1.0"
 

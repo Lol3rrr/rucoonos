@@ -12,10 +12,24 @@ pub struct Block<'m> {
     pub stack_height: usize,
 }
 
+impl<'m> Block<'m> {
+    pub fn jump_to_continuation(&mut self) {
+        match &mut self.iterator {
+            BlockIterator::Sliced(it) => for _ in it {},
+            BlockIterator::Cycled { current, .. } => {
+                *current = 0;
+            }
+        };
+    }
+}
+
 #[derive(Debug)]
 pub enum BlockIterator<'m> {
     Sliced(core::iter::Skip<core::slice::Iter<'m, Instruction>>),
-    Cycled(core::iter::Cycle<core::iter::Skip<core::slice::Iter<'m, Instruction>>>),
+    Cycled {
+        current: usize,
+        items: &'m [Instruction],
+    },
 }
 
 impl<'m> Iterator for BlockIterator<'m> {
@@ -24,20 +38,24 @@ impl<'m> Iterator for BlockIterator<'m> {
     fn next(&mut self) -> Option<Self::Item> {
         match self {
             Self::Sliced(iter) => iter.next(),
-            Self::Cycled(iter) => iter.next(),
+            Self::Cycled { current, items } => {
+                let res = items.get(*current)?;
+                *current += 1;
+                Some(res)
+            }
         }
     }
 }
-impl<'m> From<core::iter::Skip<core::slice::Iter<'m, Instruction>>> for BlockIterator<'m> {
-    fn from(iter: core::iter::Skip<core::slice::Iter<'m, Instruction>>) -> Self {
-        Self::Sliced(iter)
+impl<'m> BlockIterator<'m> {
+    pub fn block(iter: core::slice::Iter<'m, Instruction>) -> Self {
+        Self::Sliced(iter.skip(0))
     }
-}
-impl<'m> From<core::iter::Cycle<core::iter::Skip<core::slice::Iter<'m, Instruction>>>>
-    for BlockIterator<'m>
-{
-    fn from(iter: core::iter::Cycle<core::iter::Skip<core::slice::Iter<'m, Instruction>>>) -> Self {
-        Self::Cycled(iter)
+
+    pub fn looped(iter: &'m [Instruction]) -> Self {
+        Self::Cycled {
+            current: 0,
+            items: iter,
+        }
     }
 }
 

@@ -12,6 +12,8 @@ use wasm::{
     RefType, Section, TypeIndex, ValueType,
 };
 
+use crate::vm::state::BlockIterator;
+
 use self::{handler::ExternalHandler, state::Blocks};
 
 pub mod handler;
@@ -318,7 +320,19 @@ where
     pub async fn run_with_wait<F>(
         &mut self,
         name: &str,
+        wait: F,
+    ) -> Result<Vec<StackValue>, RunError>
+    where
+        F: FnMut() -> Option<Pin<Box<dyn Future<Output = ()>>>>,
+    {
+        self.run_with_wait_args(name, wait, Vec::new()).await
+    }
+
+    pub async fn run_with_wait_args<F>(
+        &mut self,
+        name: &str,
         mut wait: F,
+        args: Vec<StackValue>,
     ) -> Result<Vec<StackValue>, RunError>
     where
         F: FnMut() -> Option<Pin<Box<dyn Future<Output = ()>>>>,
@@ -363,6 +377,7 @@ where
                     .map(|(i, g)| (GlobalIndex::from(i), g))
             };
 
+            self.exec_state.op_stack.extend(args.into_iter());
             self.exec_state = Box::new(State::new(func_id, self.locals(func), globals_iter));
 
             func
@@ -371,7 +386,7 @@ where
         let mut blocks = {
             let mut tmp = Blocks::new();
             tmp.enter(
-                func.0.exp.instructions.iter().skip(0),
+                BlockIterator::block(func.0.exp.instructions.iter()),
                 func.1.input.elements.items.len(),
                 func.1.output.elements.items.len(),
                 self.exec_state.op_stack.len(),
@@ -874,7 +889,7 @@ where
                     );
 
                     let address = dyn_address as u32 + *offset;
-                    let address_end = address + 8;
+                    let address_end = address + *ws as u32;
 
                     if self.env.memory.size() < address_end as usize {
                         self.env.memory.grow(address_end as usize);
@@ -882,11 +897,19 @@ where
 
                     let target = &mut self.env.memory[address as usize..address_end as usize];
 
-                    let value = i64::to_le_bytes(value);
+                    match *ws {
+                        8 => {
+                            let value = i64::to_le_bytes(value);
 
-                    assert_eq!(8, *ws);
+                            target.copy_from_slice(&value);
+                        }
+                        4 => {
+                            let value = i32::to_le_bytes((value % (2 ^ 32)) as i32);
 
-                    target.copy_from_slice(&value);
+                            target.copy_from_slice(&value);
+                        }
+                        other => todo!(),
+                    }
                 }
                 Instruction::SubI(variant) => {
                     let span = tracing::span!(tracing::Level::TRACE, "SubI");
@@ -1160,6 +1183,27 @@ where
                     };
 
                     self.exec_state.op_stack.push(res);
+                }
+                Instruction::RotlI(var) => {
+                    let span = tracing::span!(tracing::Level::TRACE, "RotlI");
+                    let _guard = span.enter();
+
+                    tracing::trace!("RotlI");
+
+                    op::binary_op(&mut self.exec_state.op_stack, |first, second| {
+                        match (var, first, second) {
+                            (IntegerVariant::I32, StackValue::I32(fv), StackValue::I32(sv)) => {
+                                Ok(StackValue::I32(fv.rotate_left(sv as u32)))
+                            }
+                            _ => Err(RunErrorType::MismatchedTypes),
+                        }
+                    })
+                    .map_err(|ety| RunError {
+                        err: ety,
+                        ctx: RunErrorContext {
+                            instruction: Some(instr.clone()),
+                        },
+                    })?;
                 }
                 Instruction::WrapI32I64 => {
                     let span = tracing::span!(tracing::Level::TRACE, "WrapI32I64");
@@ -1715,7 +1759,7 @@ where
                     self.exec_state.op_stack.extend(values.into_iter().rev());
 
                     blocks.enter(
-                        b_instr.iter().skip(0),
+                        BlockIterator::block(b_instr.iter()),
                         input_arity,
                         output_arity,
                         prev_stack,
@@ -1754,7 +1798,7 @@ where
                     self.exec_state.op_stack.extend(values.into_iter().rev());
 
                     blocks.enter(
-                        l_instr.iter().skip(0).cycle(),
+                        BlockIterator::looped(&l_instr),
                         input_arity,
                         output_arity,
                         prev_stack,
@@ -1865,6 +1909,7 @@ where
                     let span = tracing::span!(tracing::Level::TRACE, "Return");
                     let _guard = span.enter();
 
+                    tracing::trace!("Return from {:?}", self.exec_state.func);
                     tracing::trace!(
                         "Return Op-Stack {:?} entered with {:?}",
                         self.exec_state.op_stack.len(),
@@ -1889,7 +1934,6 @@ where
 
                         for _ in 0..n {
                             let val = self.exec_state.op_stack.pop().expect("");
-
                             tmp.push(val);
                         }
 
@@ -1913,14 +1957,22 @@ where
                         self.exec_state.op_stack.pop();
                     }
 
+                    tracing::trace!("Returning Values {:?}", values);
+
                     // 7.
                     for val in values {
                         self.exec_state.op_stack.push(val);
                     }
 
-                    *blocks = self.exec_state.return_from_func().unwrap();
-
-                    return Ok(InnerLoop::Continue);
+                    match self.exec_state.return_from_func() {
+                        Ok(b) => {
+                            *blocks = b;
+                            return Ok(InnerLoop::Continue);
+                        }
+                        Err(_) => {
+                            return Ok(InnerLoop::Break);
+                        }
+                    };
                 }
                 Instruction::MemorySize => {
                     let span = tracing::span!(tracing::Level::TRACE, "Memory Size");
