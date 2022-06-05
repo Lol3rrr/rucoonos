@@ -375,10 +375,18 @@ impl Parseable for Expression {
     }
 }
 
+#[derive(Debug)]
+pub enum ConstEvalError {
+    WrongNumberOfInstructions(usize),
+    NonConstInstruction(Instruction),
+}
+
 impl Expression {
-    pub fn const_eval(&self) -> Result<i32, ()> {
+    pub fn const_eval(&self) -> Result<i32, ConstEvalError> {
         if self.instructions.len() != 1 {
-            return Err(());
+            return Err(ConstEvalError::WrongNumberOfInstructions(
+                self.instructions.len(),
+            ));
         }
 
         let instr = self.instructions.get(0).expect(
@@ -387,7 +395,7 @@ impl Expression {
 
         match instr {
             Instruction::ConstantI32(con) => Ok(*con),
-            _ => Err(()),
+            other => Err(ConstEvalError::NonConstInstruction(other.clone())),
         }
     }
 }
