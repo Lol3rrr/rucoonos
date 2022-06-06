@@ -198,6 +198,11 @@ pub struct HandleMemory<'s> {
     pub(crate) memory: &'s mut dyn memory::Memory,
 }
 
+#[derive(Debug)]
+pub enum MemoryWriteError {
+    OutOfBounds,
+}
+
 impl<'s> HandleMemory<'s> {
     pub fn grow(&mut self, n_size: usize) {
         if self.memory.size() >= n_size {
@@ -207,32 +212,32 @@ impl<'s> HandleMemory<'s> {
         self.memory.grow(n_size);
     }
 
-    pub fn writestr(&mut self, addr: u32, data: &str) -> Result<(), ()> {
+    pub fn writestr(&mut self, addr: u32, data: &str) -> Result<(), MemoryWriteError> {
         let raw = data.as_bytes();
 
         if self.memory.size() < addr as usize + raw.len() {
-            return Err(());
+            return Err(MemoryWriteError::OutOfBounds);
         }
 
         self.memory[addr as usize..addr as usize + raw.len()].copy_from_slice(raw);
         Ok(())
     }
-    pub fn writei32(&mut self, addr: u32, data: i32) -> Result<(), ()> {
+    pub fn writei32(&mut self, addr: u32, data: i32) -> Result<(), MemoryWriteError> {
         let raw = data.to_le_bytes();
 
         if self.memory.size() < addr as usize + 4 {
-            return Err(());
+            return Err(MemoryWriteError::OutOfBounds);
         }
 
         self.memory[addr as usize..addr as usize + 4].copy_from_slice(&raw);
         Ok(())
     }
 
-    pub fn writeu32(&mut self, addr: u32, data: u32) -> Result<(), ()> {
+    pub fn writeu32(&mut self, addr: u32, data: u32) -> Result<(), MemoryWriteError> {
         let raw = data.to_le_bytes();
 
         if self.memory.size() < addr as usize + 4 {
-            return Err(());
+            return Err(MemoryWriteError::OutOfBounds);
         }
 
         self.memory[addr as usize..addr as usize + 4].copy_from_slice(&raw);

@@ -301,3 +301,17 @@ impl From<OpStack> for Vec<StackValue> {
         ops.stack
     }
 }
+impl Default for OpStack {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl StackValue {
+    pub fn as_i32(&self) -> Option<i32> {
+        match self {
+            Self::I32(v) => Some(*v),
+            _ => None,
+        }
+    }
+}
